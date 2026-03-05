@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BenchmarkHub | EDUCA EDTECH Group</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+:root {
+    --primary: #1B2A4A;
+    --secondary: #2E86AB;
+    --accent: #F18F01;
+    --success: #2BA84A;
+    --danger: #E63946;
+    --bg: #F8F9FA;
+    --card: #FFFFFF;
+    --text: #2D3436;
+    --text-light: #636E72;
+    --border: #DFE6E9;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+/* Header */
+.header { background: linear-gradient(135deg, var(--primary), var(--secondary)); color: white; padding: 20px 32px; display: flex; align-items: center; gap: 16px; }
+.header img { height: 36px; }
+.header h1 { font-size: 1.4rem; font-weight: 700; }
+.header small { opacity: 0.8; font-size: 0.85rem; }
+
+/* Stepper */
+.stepper { display: flex; justify-content: center; gap: 0; padding: 20px 32px 0; background: white; border-bottom: 1px solid var(--border); }
+.step { display: flex; align-items: center; gap: 8px; padding: 12px 20px; position: relative; font-size: 0.85rem; color: var(--text-light); }
+.step .num { width: 28px; height: 28px; border-radius: 50%; background: var(--border); color: var(--text-light); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.8rem; flex-shrink: 0; }
+.step.active { color: var(--secondary); font-weight: 600; }
+.step.active .num { background: var(--secondary); color: white; }
+.step.completed .num { background: var(--success); color: white; }
+.step.completed { color: var(--success); }
+.step-connector { width: 40px; height: 2px; background: var(--border); align-self: center; }
+.step-connector.active { background: var(--secondary); }
+
+/* Main content */
+.main { max-width: 1200px; margin: 0 auto; padding: 24px 32px; }
+
+/* Cards */
+.card { background: var(--card); border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 1px solid var(--border); }
+.card h2 { color: var(--primary); font-size: 1.15rem; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+.card h2 .icon { font-size: 1.2rem; }
+
+/* Upload */
+.upload-zone { border: 2px dashed var(--secondary); border-radius: 12px; padding: 48px; text-align: center; cursor: pointer; transition: all 0.2s; background: #f0f7ff; }
+.upload-zone:hover { border-color: var(--accent); background: #fff8f0; }
+.upload-zone.dragover { border-color: var(--accent); background: #fff3e0; }
+.upload-zone .icon { font-size: 2.5rem; margin-bottom: 8px; }
+.upload-zone p { color: var(--text-light); margin-top: 8px; }
+.upload-zone input { display: none; }
+
+/* Faculty input */
+.faculty-input { margin-top: 16px; display: flex; gap: 12px; align-items: center; }
+.faculty-input label { font-weight: 600; white-space: nowrap; }
+.faculty-input input { flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 0.95rem; }
+
+/* KPI grid */
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.kpi { background: var(--bg); border-radius: 8px; padding: 16px; text-align: center; }
+.kpi .value { font-size: 1.5rem; font-weight: 700; color: var(--primary); }
+.kpi .label { font-size: 0.8rem; color: var(--text-light); margin-top: 2px; }
+
+/* Tables */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+th { background: var(--primary); color: white; padding: 8px 10px; text-align: left; position: sticky; top: 0; white-space: nowrap; }
+td { padding: 7px 10px; border-bottom: 1px solid #eee; }
+tr:hover { background: #f0f7ff; }
+
+/* Buttons */
+.btn { padding: 10px 24px; border: none; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; gap: 8px; }
+.btn-primary { background: var(--secondary); color: white; }
+.btn-primary:hover { background: #236d8e; }
+.btn-accent { background: var(--accent); color: white; }
+.btn-accent:hover { background: #d07c01; }
+.btn-success { background: var(--success); color: white; }
+.btn-success:hover { background: #228b3a; }
+.btn-outline { background: transparent; color: var(--secondary); border: 2px solid var(--secondary); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-group { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+
+/* Progress */
+.progress-bar { width: 100%; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; margin: 12px 0; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, var(--secondary), var(--accent)); border-radius: 4px; transition: width 0.5s ease; }
+.progress-text { font-size: 0.85rem; color: var(--text-light); }
+
+/* Phase content */
+.phase { display: none; }
+.phase.active { display: block; }
+
+/* Selection checkboxes */
+.product-select { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg); border-radius: 6px; margin-bottom: 6px; }
+.product-select input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--secondary); }
+.product-select .info { flex: 1; }
+.product-select .name { font-weight: 600; font-size: 0.9rem; }
+.product-select .meta { font-size: 0.78rem; color: var(--text-light); }
+
+/* SWOT */
+.swot-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; background: #ddd; border-radius: 8px; overflow: hidden; margin: 12px 0; }
+.swot-box { padding: 16px; }
+.swot-box h3 { font-size: 0.95rem; margin-bottom: 8px; }
+.swot-box ul { padding-left: 18px; font-size: 0.82rem; }
+.swot-box li { margin-bottom: 4px; }
+.swot-s { background: #d4edda; }
+.swot-w { background: #fff3cd; }
+.swot-o { background: #d6eaf8; }
+.swot-t { background: #f8d7da; }
+
+/* Download section */
+.download-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+.download-card { background: var(--bg); border-radius: 10px; padding: 24px; text-align: center; border: 2px solid var(--border); transition: all 0.2s; }
+.download-card:hover { border-color: var(--secondary); }
+.download-card .icon { font-size: 2rem; margin-bottom: 8px; }
+.download-card h3 { font-size: 1rem; margin-bottom: 4px; }
+.download-card p { font-size: 0.8rem; color: var(--text-light); margin-bottom: 12px; }
+
+/* Loading */
+.spinner { display: inline-block; width: 18px; height: 18px; border: 3px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.loading-box { background: white; padding: 32px; border-radius: 12px; text-align: center; min-width: 300px; }
+.loading-box .spinner-lg { width: 40px; height: 40px; border-width: 4px; border-color: var(--border); border-top-color: var(--secondary); margin: 0 auto 16px; }
+
+/* Error */
+.error-msg { background: #ffeef0; color: var(--danger); padding: 12px 16px; border-radius: 8px; margin: 12px 0; font-size: 0.9rem; }
+
+/* Charts in phase view */
+.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+@media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } .stepper { flex-wrap: wrap; } }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+    <img src="https://www.educaedtech.com/images/educa-edtech-group-dark.webp" alt="EDUCA EDTECH" onerror="this.style.display='none'">
+    <div>
+        <h1>BenchmarkHub</h1>
+        <small>Benchmark de Producto Formativo Automatizado</small>
+    </div>
+</div>
+
+<!-- Stepper -->
+<div class="stepper" id="stepper">
+    <div class="step active" data-phase="1"><span class="num">1</span> Subida Excel</div>
+    <div class="step-connector"></div>
+    <div class="step" data-phase="2"><span class="num">2</span> Seleccion</div>
+    <div class="step-connector"></div>
+    <div class="step" data-phase="3"><span class="num">3</span> Research</div>
+    <div class="step-connector"></div>
+    <div class="step" data-phase="4"><span class="num">4</span> Estrategia</div>
+    <div class="step-connector"></div>
+    <div class="step" data-phase="5"><span class="num">5</span> Entregables</div>
+</div>
+
+<div class="main">
+
+<!-- PHASE 1 -->
+<div class="phase active" id="phase1">
+    <div class="card">
+        <h2><span class="icon">&#128200;</span> Fase 1 &mdash; Subida y Analisis del Excel de Ventas</h2>
+        <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+            <div class="icon">&#128196;</div>
+            <strong>Arrastra tu archivo Excel aqui</strong>
+            <p>o haz clic para seleccionar (.xlsx)</p>
+            <input type="file" id="fileInput" accept=".xlsx,.xls">
+        </div>
+        <div class="faculty-input">
+            <label>Nombre de la Facultad:</label>
+            <input type="text" id="facultyName" placeholder="Ej: Facultad de Idiomas, Educacion, Empresas...">
+        </div>
+        <div id="phase1Error"></div>
+    </div>
+    <div id="phase1Results" style="display:none">
+        <div class="card">
+            <h2><span class="icon">&#128202;</span> KPIs Principales</h2>
+            <div class="kpi-grid" id="kpiGrid"></div>
+        </div>
+        <div class="card">
+            <h2><span class="icon">&#127942;</span> Top 20 Productos</h2>
+            <div class="chart-row">
+                <div><canvas id="p1ChartTop"></canvas></div>
+                <div><canvas id="p1ChartFaculty"></canvas></div>
+            </div>
+            <div class="table-wrap" id="top20Table"></div>
+        </div>
+        <div class="btn-group">
+            <button class="btn btn-primary" onclick="goToPhase(2)">Continuar a Fase 2 &#8594;</button>
+        </div>
+    </div>
+</div>
+
+<!-- PHASE 2 -->
+<div class="phase" id="phase2">
+    <div class="card">
+        <h2><span class="icon">&#127919;</span> Fase 2 &mdash; Seleccion de Productos para Benchmark</h2>
+        <p style="color:var(--text-light);margin-bottom:16px">Claude ha propuesto los siguientes productos. Puedes ajustar la seleccion antes de continuar.</p>
+        <div id="selectionContent"></div>
+        <div id="phase2Error"></div>
+    </div>
+    <div class="btn-group">
+        <button class="btn btn-outline" onclick="goToPhase(1)">&#8592; Volver</button>
+        <button class="btn btn-primary" onclick="confirmAndGoPhase3()">Confirmar y continuar a Fase 3 &#8594;</button>
+    </div>
+</div>
+
+<!-- PHASE 3 -->
+<div class="phase" id="phase3">
+    <div class="card">
+        <h2><span class="icon">&#128269;</span> Fase 3 &mdash; Research de Competencia</h2>
+        <div id="researchProgress">
+            <p class="progress-text">Preparando research...</p>
+            <div class="progress-bar"><div class="progress-fill" id="researchFill" style="width:0%"></div></div>
+            <p class="progress-text" id="researchStatus">Esperando...</p>
+        </div>
+        <div id="researchResults" style="display:none"></div>
+        <div id="phase3Error"></div>
+    </div>
+    <div class="btn-group" id="phase3Buttons" style="display:none">
+        <button class="btn btn-outline" onclick="goToPhase(2)">&#8592; Volver</button>
+        <button class="btn btn-primary" onclick="goToPhase(4)">Continuar a Fase 4 &#8594;</button>
+    </div>
+</div>
+
+<!-- PHASE 4 -->
+<div class="phase" id="phase4">
+    <div class="card">
+        <h2><span class="icon">&#128161;</span> Fase 4 &mdash; Analisis Estrategico</h2>
+        <div id="strategicContent"></div>
+        <div id="phase4Error"></div>
+    </div>
+    <div class="btn-group" id="phase4Buttons" style="display:none">
+        <button class="btn btn-outline" onclick="goToPhase(3)">&#8592; Volver</button>
+        <button class="btn btn-primary" onclick="goToPhase(5)">Generar Entregables &#8594;</button>
+    </div>
+</div>
+
+<!-- PHASE 5 -->
+<div class="phase" id="phase5">
+    <div class="card">
+        <h2><span class="icon">&#128230;</span> Fase 5 &mdash; Propuestas y Entregables</h2>
+        <div id="proposalsContent"></div>
+        <div id="phase5Error"></div>
+    </div>
+    <div id="downloadSection" style="display:none">
+        <div class="card">
+            <h2><span class="icon">&#128229;</span> Descargar Entregables</h2>
+            <div class="download-grid" id="downloadGrid"></div>
+        </div>
+    </div>
+</div>
+
+</div>
+
+<!-- Loading overlay -->
+<div class="loading-overlay" id="loadingOverlay" style="display:none">
+    <div class="loading-box">
+        <div class="spinner spinner-lg"></div>
+        <p id="loadingText">Procesando...</p>
+    </div>
+</div>
+
+<script>
+// ── State ──
+let state = {
+    sessionId: null,
+    phase: 1,
+    analysis: null,
+    selection: null,
+    research: null,
+    strategic: null,
+    proposals: null,
+};
+
+// ── Loading ──
+function showLoading(text) { document.getElementById('loadingText').textContent = text; document.getElementById('loadingOverlay').style.display = 'flex'; }
+function hideLoading() { document.getElementById('loadingOverlay').style.display = 'none'; }
+
+function showError(phaseId, msg) {
+    const el = document.getElementById(phaseId + 'Error');
+    if (el) el.innerHTML = `<div class="error-msg">${msg}</div>`;
+}
+
+// ── Stepper ──
+function updateStepper(activePhase) {
+    document.querySelectorAll('.step').forEach((s, i) => {
+        const p = parseInt(s.dataset.phase);
+        s.className = 'step' + (p < activePhase ? ' completed' : p === activePhase ? ' active' : '');
+    });
+    document.querySelectorAll('.step-connector').forEach((c, i) => {
+        c.className = 'step-connector' + (i + 1 < activePhase ? ' active' : '');
+    });
+}
+
+function showPhase(n) {
+    document.querySelectorAll('.phase').forEach(p => p.classList.remove('active'));
+    document.getElementById('phase' + n).classList.add('active');
+    updateStepper(n);
+    state.phase = n;
+}
+
+// ── Upload ──
+const uploadZone = document.getElementById('uploadZone');
+const fileInput = document.getElementById('fileInput');
+
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', e => { e.preventDefault(); uploadZone.classList.remove('dragover'); if (e.dataTransfer.files.length) handleUpload(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change', e => { if (e.target.files.length) handleUpload(e.target.files[0]); });
+
+async function handleUpload(file) {
+    if (!file.name.match(/\.xlsx?$/i)) { showError('phase1', 'Por favor sube un archivo .xlsx'); return; }
+    showLoading('Analizando archivo Excel...');
+    const form = new FormData();
+    form.append('file', file);
+    try {
+        const res = await fetch('/api/phase1/upload', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Error');
+        state.sessionId = data.session_id;
+        state.analysis = data.analysis;
+        renderPhase1(data.analysis);
+    } catch (e) {
+        showError('phase1', `Error: ${e.message}`);
+    } finally { hideLoading(); }
+}
+
+function renderPhase1(a) {
+    // KPIs
+    const kpis = a.kpis || {};
+    const grid = document.getElementById('kpiGrid');
+    grid.innerHTML = '';
+    const kpiItems = [
+        ['&#128200;', 'Ventas Totales', (kpis.total_ventas || 0).toLocaleString()],
+        ['&#128218;', 'Productos', kpis.total_productos || 0],
+        ['&#9989;', 'Activos', kpis.productos_activos || 0],
+        ['&#128308;', 'Muertos', kpis.productos_muertos || 0],
+        ['&#128200;', 'Crecimiento', (kpis.crecimiento_medio || 0) + '%'],
+    ];
+    kpiItems.forEach(([icon, label, value]) => {
+        grid.innerHTML += `<div class="kpi"><div class="value">${value}</div><div class="label">${label}</div></div>`;
+    });
+
+    // Top 20 table
+    const top20 = a.top_20 || [];
+    if (top20.length) {
+        const cols = Object.keys(top20[0]);
+        let html = '<table><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>';
+        top20.forEach(r => {
+            html += '<tr>' + cols.map(c => `<td>${r[c] != null ? r[c] : ''}</td>`).join('') + '</tr>';
+        });
+        html += '</table>';
+        document.getElementById('top20Table').innerHTML = html;
+    }
+
+    // Charts
+    const nameCol = a.name_column || 'Producto';
+    const names = top20.slice(0, 12).map(r => truncate(r[nameCol] || '?', 30));
+    const values = top20.slice(0, 12).map(r => r.ventas_total || 0);
+    new Chart(document.getElementById('p1ChartTop'), {
+        type: 'bar', data: { labels: names, datasets: [{ label: 'Ventas', data: values, backgroundColor: '#2E86AB' }] },
+        options: { indexAxis: 'y', responsive: true, plugins: { title: { display: true, text: 'Top Productos' }, legend: { display: false } } }
+    });
+
+    const byFac = a.by_faculty || [];
+    if (byFac.length) {
+        new Chart(document.getElementById('p1ChartFaculty'), {
+            type: 'doughnut',
+            data: { labels: byFac.slice(0,8).map(f => f.Facultad || '?'), datasets: [{ data: byFac.slice(0,8).map(f => f.ventas_totales), backgroundColor: ['#2E86AB','#F18F01','#2BA84A','#E63946','#9B59B6','#1ABC9C','#E67E22','#3498DB'] }] },
+            options: { responsive: true, plugins: { title: { display: true, text: 'Por Facultad' } } }
+        });
+    }
+
+    document.getElementById('phase1Results').style.display = 'block';
+}
+
+// ── Phase navigation ──
+async function goToPhase(n) {
+    if (n === 2) await runPhase2();
+    else if (n === 3) { showPhase(3); await runPhase3(); }
+    else if (n === 4) { showPhase(4); await runPhase4(); }
+    else if (n === 5) { showPhase(5); await runPhase5(); }
+    else showPhase(n);
+}
+
+// ── PHASE 2 ──
+async function runPhase2() {
+    showLoading('Generando seleccion de productos...');
+    try {
+        const res = await fetch('/api/phase2/select', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: state.sessionId, faculty_name: document.getElementById('facultyName').value || 'General' }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Error');
+        state.selection = data.selection;
+        renderPhase2(data.selection);
+        showPhase(2);
+    } catch (e) { showError('phase2', e.message); showPhase(2); }
+    finally { hideLoading(); }
+}
+
+function renderPhase2(sel) {
+    const container = document.getElementById('selectionContent');
+    let html = '';
+
+    const renderGroup = (title, items, color) => {
+        if (!items || !items.length) return '';
+        let h = `<h3 style="color:${color};margin:16px 0 8px">${title} (${items.length})</h3>`;
+        items.forEach((p, i) => {
+            h += `<div class="product-select">
+                <input type="checkbox" checked data-group="${title}" data-idx="${i}">
+                <div class="info">
+                    <div class="name">${p.name || '?'}</div>
+                    <div class="meta">${p.type || ''} | Ventas: ${(p.total_sales || 0).toLocaleString()} | Crecimiento: ${p.growth_pct || 0}% | ${p.reason || ''}</div>
+                </div>
+            </div>`;
+        });
+        return h;
+    };
+
+    html += renderGroup('Productos Estrella', sel.stars, 'var(--accent)');
+    html += renderGroup('Emergentes', sel.emerging, 'var(--success)');
+    html += renderGroup('En Riesgo', sel.at_risk, 'var(--danger)');
+    if (sel.summary) html += `<p style="margin-top:16px;color:var(--text-light);font-style:italic">${sel.summary}</p>`;
+    container.innerHTML = html;
+}
+
+async function confirmAndGoPhase3() {
+    // Confirm selection
+    try {
+        await fetch('/api/phase2/confirm', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: state.sessionId }),
+        });
+    } catch (e) { /* non-critical */ }
+    goToPhase(3);
+}
+
+// ── PHASE 3 ──
+async function runPhase3() {
+    const fill = document.getElementById('researchFill');
+    const status = document.getElementById('researchStatus');
+    document.getElementById('researchProgress').style.display = 'block';
+    document.getElementById('researchResults').style.display = 'none';
+    document.getElementById('phase3Buttons').style.display = 'none';
+    fill.style.width = '5%';
+    status.textContent = 'Iniciando research de competencia...';
+
+    try {
+        // Use SSE for progress
+        const evtSource = new EventSource(`/api/phase3/research/stream?session_id=${state.sessionId}`);
+        evtSource.onmessage = (e) => {
+            const d = JSON.parse(e.data);
+            if (d.done) {
+                evtSource.close();
+                fill.style.width = '100%';
+                status.textContent = `Research completado: ${d.total_researched} productos investigados.`;
+                // Fetch full results
+                fetchResearchResults();
+                return;
+            }
+            const pct = Math.round((d.current / d.total) * 100);
+            fill.style.width = pct + '%';
+            status.textContent = `Investigando: ${d.current_product} (${d.current}/${d.total})`;
+        };
+        evtSource.onerror = () => {
+            evtSource.close();
+            // Fallback: direct request
+            runPhase3Direct();
+        };
+    } catch (e) {
+        runPhase3Direct();
+    }
+}
+
+async function runPhase3Direct() {
+    const fill = document.getElementById('researchFill');
+    const status = document.getElementById('researchStatus');
+    fill.style.width = '30%';
+    status.textContent = 'Investigando competencia (esto puede tardar varios minutos)...';
+
+    try {
+        const res = await fetch('/api/phase3/research', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: state.sessionId }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Error');
+        state.research = data.research;
+        fill.style.width = '100%';
+        status.textContent = 'Research completado.';
+        renderPhase3(data.research);
+    } catch (e) {
+        showError('phase3', e.message);
+        fill.style.width = '100%';
+        fill.style.background = 'var(--danger)';
+    }
+}
+
+async function fetchResearchResults() {
+    try {
+        const res = await fetch(`/api/session/${state.sessionId}`);
+        const session = await res.json();
+        // Now get full research from phase3 endpoint response cache
+        const r = await fetch('/api/phase3/research', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: state.sessionId }),
+        });
+        const data = await r.json();
+        state.research = data.research;
+        renderPhase3(data.research);
+    } catch (e) {
+        showError('phase3', 'Error cargando resultados.');
+    }
+}
+
+function renderPhase3(results) {
+    const container = document.getElementById('researchResults');
+    let html = '<h3 style="margin-bottom:12px">Resultados del Research</h3>';
+    html += '<div class="table-wrap"><table><tr><th>Nuestro Producto</th><th>Competidor</th><th>Producto</th><th>Precio</th><th>Horas</th><th>ECTS</th><th>Diferenciador</th><th>URL</th></tr>';
+    (results || []).forEach(r => {
+        (r.competitors || []).forEach(c => {
+            const url = c.url || '#';
+            html += `<tr>
+                <td>${r.our_product || ''}</td>
+                <td>${c.competitor_name || ''}</td>
+                <td>${c.product_name || ''}</td>
+                <td>${c.price || 'N/D'}</td>
+                <td>${c.hours || 'N/D'}</td>
+                <td>${c.ects || 'N/D'}</td>
+                <td>${c.key_differentiator || ''}</td>
+                <td><a href="${url}" target="_blank">Ver</a></td>
+            </tr>`;
+        });
+    });
+    html += '</table></div>';
+    container.innerHTML = html;
+    container.style.display = 'block';
+    document.getElementById('phase3Buttons').style.display = 'flex';
+}
+
+// ── PHASE 4 ──
+async function runPhase4() {
+    showLoading('Generando analisis estrategico...');
+    try {
+        const res = await fetch('/api/phase4/analyze', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: state.sessionId }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Error');
+        state.strategic = data.strategic;
+        renderPhase4(data.strategic);
+        document.getElementById('phase4Buttons').style.display = 'flex';
+    } catch (e) { showError('phase4', e.message); }
+    finally { hideLoading(); }
+}
+
+function renderPhase4(s) {
+    const container = document.getElementById('strategicContent');
+    let html = '';
+
+    // Competitor stars
+    const stars = s.competitor_stars || [];
+    if (stars.length) {
+        html += '<h3 style="margin-bottom:8px">Productos Estrella de Competidores</h3>';
+        html += '<div class="table-wrap"><table><tr><th>Clasificacion</th><th>Competidor</th><th>Producto</th><th>Razon</th><th>Impacto</th></tr>';
+        stars.forEach(st => {
+            const cls = st.classification || '';
+            const emoji = { amenaza_directa: '&#128308;', oportunidad_nicho: '&#128993;', referente_calidad: '&#128994;' }[cls] || '';
+            const label = { amenaza_directa: 'Amenaza', oportunidad_nicho: 'Oportunidad', referente_calidad: 'Referente' }[cls] || cls;
+            html += `<tr><td>${emoji} ${label}</td><td>${st.competitor||''}</td><td>${st.product||''}</td><td>${st.reason||''}</td><td>${st.impact||''}</td></tr>`;
+        });
+        html += '</table></div>';
+    }
+
+    // SWOT
+    const swot = s.swot || {};
+    html += '<h3 style="margin:20px 0 8px">Analisis DAFO</h3>';
+    html += '<div class="swot-grid">';
+    html += `<div class="swot-box swot-s"><h3>&#128170; Fortalezas</h3><ul>${(swot.strengths||[]).map(i=>'<li>'+i+'</li>').join('')}</ul></div>`;
+    html += `<div class="swot-box swot-w"><h3>&#9888; Debilidades</h3><ul>${(swot.weaknesses||[]).map(i=>'<li>'+i+'</li>').join('')}</ul></div>`;
+    html += `<div class="swot-box swot-o"><h3>&#128161; Oportunidades</h3><ul>${(swot.opportunities||[]).map(i=>'<li>'+i+'</li>').join('')}</ul></div>`;
+    html += `<div class="swot-box swot-t"><h3>&#128680; Amenazas</h3><ul>${(swot.threats||[]).map(i=>'<li>'+i+'</li>').join('')}</ul></div>`;
+    html += '</div>';
+
+    if (s.strategic_summary) html += `<p style="margin-top:16px;font-style:italic;color:var(--text-light)">${s.strategic_summary}</p>`;
+    container.innerHTML = html;
+}
+
+// ── PHASE 5 ──
+async function runPhase5() {
+    showLoading('Generando propuestas y entregables (esto puede tardar unos minutos)...');
+    try {
+        const res = await fetch('/api/phase5/generate', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: state.sessionId }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Error');
+        state.proposals = data.proposals;
+        renderPhase5(data.proposals, data.deliverables);
+    } catch (e) { showError('phase5', e.message); }
+    finally { hideLoading(); }
+}
+
+function renderPhase5(props, deliverables) {
+    const container = document.getElementById('proposalsContent');
+    let html = '';
+
+    // Improvements
+    const imps = props.improvements || [];
+    if (imps.length) {
+        html += '<h3 style="margin-bottom:8px">Propuestas de Mejora</h3>';
+        html += '<div class="table-wrap"><table><tr><th>Prioridad</th><th>Producto</th><th>Precio</th><th>Nombre Propuesto</th><th>Atributos</th></tr>';
+        imps.forEach(i => {
+            const pcolor = { alta: 'var(--danger)', media: 'var(--accent)', baja: 'var(--success)' }[i.priority] || '';
+            html += `<tr><td style="color:${pcolor};font-weight:bold">${i.priority||''}</td><td>${i.current_product||''}</td><td>${i.current_price||''} -> ${i.proposed_price||''}</td><td>${i.proposed_name||'-'}</td><td>${(i.attributes_to_add||[]).join(', ')}</td></tr>`;
+        });
+        html += '</table></div>';
+    }
+
+    // New products
+    const nps = props.new_products || [];
+    if (nps.length) {
+        html += '<h3 style="margin:20px 0 8px">Nuevos Productos Propuestos</h3>';
+        html += '<div class="table-wrap"><table><tr><th>#</th><th>Producto</th><th>Tipo</th><th>Precio</th><th>Justificacion</th></tr>';
+        nps.forEach((n, idx) => {
+            html += `<tr><td>${idx+1}</td><td>${n.name||''}</td><td>${n.type||''}</td><td>${n.recommended_price||''}</td><td>${n.strategic_justification||''}</td></tr>`;
+        });
+        html += '</table></div>';
+    }
+
+    if (props.executive_summary) html += `<p style="margin-top:16px;font-style:italic;color:var(--text-light)">${props.executive_summary}</p>`;
+    container.innerHTML = html;
+
+    // Downloads
+    if (deliverables) {
+        const grid = document.getElementById('downloadGrid');
+        grid.innerHTML = '';
+        if (deliverables.html) {
+            grid.innerHTML += `<div class="download-card"><div class="icon">&#128196;</div><h3>Informe HTML</h3><p>Interactivo con Chart.js</p><a href="${deliverables.html}" class="btn btn-primary" download>Descargar HTML</a></div>`;
+        }
+        if (deliverables.excel) {
+            grid.innerHTML += `<div class="download-card"><div class="icon">&#128202;</div><h3>Excel Datos</h3><p>9 hojas profesionales</p><a href="${deliverables.excel}" class="btn btn-success" download>Descargar Excel</a></div>`;
+        }
+        if (deliverables.pdf) {
+            grid.innerHTML += `<div class="download-card"><div class="icon">&#128462;</div><h3>Informe PDF</h3><p>Graficos estaticos</p><a href="${deliverables.pdf}" class="btn btn-accent" download>Descargar PDF</a></div>`;
+        }
+        // Show errors
+        ['html_error', 'excel_error', 'pdf_error'].forEach(k => {
+            if (deliverables[k]) grid.innerHTML += `<div class="error-msg">Error generando ${k.replace('_error','')}: ${deliverables[k]}</div>`;
+        });
+        document.getElementById('downloadSection').style.display = 'block';
+    }
+}
+
+// ── Util ──
+function truncate(s, n) { return (s||'').length > n ? s.substring(0, n) + '...' : (s||''); }
+</script>
+</body>
+</html>
