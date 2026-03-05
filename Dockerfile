@@ -16,6 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install chromium
 
+# Cache bust: v3 - 2026-03-05
 COPY . .
 
 # Create persistent directories

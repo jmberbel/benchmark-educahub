@@ -1,4 +1,4 @@
-# v2 - force rebuild
+# v3 - force rebuild 2026-03-05
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 python-multipart==0.0.9
