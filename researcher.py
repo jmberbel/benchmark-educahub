@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_SEARCHES", "2"))
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
-RETRY_BASE_DELAY = 5  # seconds
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "5"))
+RETRY_BASE_DELAY = 15  # seconds
 
 # Brands that belong to EDUCA EDTECH Group — never treat as competition
 EDUCA_BRANDS = [
