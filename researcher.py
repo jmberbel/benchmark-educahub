@@ -133,38 +133,41 @@ async def propose_selection(analysis_data: dict) -> dict:
     """
     client = _get_client()
 
-    prompt = f"""Eres un analista de producto formativo de EDUCA EDTECH Group.
+    # Compact data to reduce tokens
+    top_products = [
+        {k: p.get(k) for k in ["IDIOMA", "Producto", "Precio", "Créditos", "ventas_total", "crecimiento_pct"] if p.get(k) is not None}
+        for p in analysis_data.get('top_20', [])[:15]
+    ]
+    emerging = [
+        {k: p.get(k) for k in ["IDIOMA", "Producto", "ventas_total", "crecimiento_pct"] if p.get(k) is not None}
+        for p in analysis_data.get('emerging', [])[:8]
+    ]
+    declining = [
+        {k: p.get(k) for k in ["IDIOMA", "Producto", "ventas_total", "crecimiento_pct"] if p.get(k) is not None}
+        for p in analysis_data.get('declining', [])[:8]
+    ]
 
-Basándote en estos datos de análisis de ventas, propón una selección de productos para benchmark competitivo.
+    prompt = f"""Analista de producto formativo. Selecciona productos para benchmark competitivo.
 
-DATOS DE ANÁLISIS:
-- KPIs: {json.dumps(analysis_data.get('kpis', {}), ensure_ascii=False)}
-- Top 20 productos: {json.dumps(analysis_data.get('top_20', [])[:20], ensure_ascii=False)}
-- Productos emergentes (+15% crecimiento): {json.dumps(analysis_data.get('emerging', [])[:10], ensure_ascii=False)}
-- Productos en declive (-15%): {json.dumps(analysis_data.get('declining', [])[:10], ensure_ascii=False)}
-- Productos muertos: {json.dumps(analysis_data.get('dead_products', [])[:10], ensure_ascii=False)}
-- Distribución por facultad: {json.dumps(analysis_data.get('by_faculty', [])[:10], ensure_ascii=False)}
+KPIs: {json.dumps(analysis_data.get('kpis', {}), ensure_ascii=False)}
+Top productos: {json.dumps(top_products, ensure_ascii=False)}
+Emergentes (+15%): {json.dumps(emerging, ensure_ascii=False)}
+En declive (-15%): {json.dumps(declining, ensure_ascii=False)}
 
 Propón:
-1. **Productos estrella** (5-10): los más vendidos, generan el grueso del revenue
-2. **Productos emergentes** (3-5): mayor crecimiento reciente
-3. **Productos en riesgo** (3-5): mayor caída sostenida, candidatos a renovar
+1. Estrellas (5-10): más vendidos
+2. Emergentes (3-5): mayor crecimiento
+3. En riesgo (3-5): mayor caída
 
-Para cada producto incluye: nombre, tipo, precio (si disponible), horas (si disponible), ventas_total, crecimiento_pct (si disponible), y razón de selección.
+Para cada uno: name, type, price, hours, total_sales, growth_pct, reason.
 
-Responde SOLO con un JSON válido con esta estructura:
-{{
-  "stars": [
-    {{"name": "...", "type": "...", "price": ..., "hours": ..., "total_sales": ..., "growth_pct": ..., "reason": "..."}}
-  ],
-  "emerging": [...],
-  "at_risk": [...],
-  "summary": "Resumen ejecutivo de la selección en 2-3 frases."
-}}"""
+Responde SOLO JSON:
+{{"stars":[{{"name":"...","type":"...","price":0,"hours":0,"total_sales":0,"growth_pct":0,"reason":"..."}}],"emerging":[...],"at_risk":[...],"summary":"Resumen en 2 frases."}}"""
 
     response = await _call_claude_with_retry(
         client,
         messages=[{"role": "user", "content": prompt}],
+        model=RESEARCH_MODEL,
     )
 
     text = response.content[0].text
