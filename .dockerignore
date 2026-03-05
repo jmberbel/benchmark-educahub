@@ -1,0 +1,16 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+.DS_Store
+.env
+.env.local
+.env.production
+.vscode
+.idea
+uploads/
+outputs/
+sessions/
+*.log
+README.md
+.dockerignore

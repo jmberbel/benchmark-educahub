@@ -1,6 +1,7 @@
 """
 main.py — FastAPI application for BenchmarkHub.
 Manages sessions, file uploads, and orchestrates the 5-phase benchmark process.
+Includes: basic auth, session persistence to disk, configurable CORS.
 """
 
 import os
@@ -9,14 +10,16 @@ import json
 import asyncio
 import logging
 import shutil
+import secrets
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from analyzer import analyze_sales
 from researcher import (
@@ -37,28 +40,119 @@ logger = logging.getLogger(__name__)
 
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/app/uploads"))
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/app/outputs"))
+SESSION_DIR = Path(os.getenv("SESSION_DIR", "/app/sessions"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+SESSION_DIR.mkdir(parents=True, exist_ok=True)
+
+# Auth config
+AUTH_USERNAME = os.getenv("AUTH_USERNAME", "")
+AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "")
+AUTH_ENABLED = bool(AUTH_USERNAME and AUTH_PASSWORD)
+
+# CORS config
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 
 # ── App ──
-app = FastAPI(title="BenchmarkHub", version="1.0.0")
+app = FastAPI(title="BenchmarkHub", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# In-memory session store
+security = HTTPBasic()
+
+# In-memory session cache (backed by JSON files)
 sessions: dict = {}
+
+
+# ── Auth ──
+def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
+    """Verify HTTP Basic Auth credentials if auth is enabled."""
+    if not AUTH_ENABLED:
+        return True
+    correct_user = secrets.compare_digest(credentials.username, AUTH_USERNAME)
+    correct_pass = secrets.compare_digest(credentials.password, AUTH_PASSWORD)
+    if not (correct_user and correct_pass):
+        raise HTTPException(
+            status_code=401,
+            detail="Credenciales incorrectas",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return True
+
+
+def optional_auth(request: Request):
+    """If auth is enabled, require it. If not, pass through."""
+    if not AUTH_ENABLED:
+        return True
+    # Extract credentials from Authorization header
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        raise HTTPException(
+            status_code=401,
+            detail="Autenticación requerida",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return True
+
+
+# ── Session persistence ──
+def _save_session(session_id: str, data: dict):
+    """Save session to disk as JSON."""
+    path = SESSION_DIR / f"{session_id}.json"
+    # Make a copy to avoid modifying the original
+    save_data = {}
+    for k, v in data.items():
+        try:
+            json.dumps(v)
+            save_data[k] = v
+        except (TypeError, ValueError):
+            save_data[k] = str(v)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(save_data, f, ensure_ascii=False, indent=2, default=str)
+
+
+def _load_session(session_id: str) -> Optional[dict]:
+    """Load session from disk."""
+    path = SESSION_DIR / f"{session_id}.json"
+    if path.exists():
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+def _load_all_sessions():
+    """Load all sessions from disk on startup."""
+    for path in SESSION_DIR.glob("*.json"):
+        sid = path.stem
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                sessions[sid] = json.load(f)
+        except Exception as e:
+            logger.warning(f"Could not load session {sid}: {e}")
+
+
+# Load sessions on startup
+@app.on_event("startup")
+async def startup_load_sessions():
+    _load_all_sessions()
+    logger.info(f"Loaded {len(sessions)} sessions from disk")
+    logger.info(f"Auth enabled: {AUTH_ENABLED}")
 
 
 # ── Health ──
 @app.get("/health")
 async def health():
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+    return {
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "auth_enabled": AUTH_ENABLED,
+    }
 
 
 # ── Serve frontend ──
@@ -71,7 +165,12 @@ async def serve_frontend():
 # ── Session management ──
 def _get_session(session_id: str) -> dict:
     if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Sesion no encontrada")
+        # Try loading from disk
+        loaded = _load_session(session_id)
+        if loaded:
+            sessions[session_id] = loaded
+        else:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
     return sessions[session_id]
 
 
@@ -79,6 +178,12 @@ def _session_dir(session_id: str) -> Path:
     d = OUTPUT_DIR / session_id
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _persist(session_id: str):
+    """Convenience: save session to disk after mutation."""
+    if session_id in sessions:
+        _save_session(session_id, sessions[session_id])
 
 
 # ─────────────── PHASE 1: Upload & Analyze ───────────────
@@ -121,6 +226,7 @@ async def phase1_upload(file: UploadFile = File(...)):
         "faculty_name": "General",
         "created_at": datetime.utcnow().isoformat(),
     }
+    _persist(session_id)
 
     return {
         "session_id": session_id,
@@ -145,6 +251,7 @@ async def phase2_select(request: Request):
     if custom_selection:
         session["selection"] = custom_selection
         session["phase"] = 2
+        _persist(session_id)
         return {"session_id": session_id, "phase": 2, "selection": custom_selection}
 
     # Otherwise, auto-propose with Claude
@@ -152,10 +259,11 @@ async def phase2_select(request: Request):
         selection = await propose_selection(session["analysis"])
     except Exception as e:
         logger.error(f"Selection error: {e}")
-        raise HTTPException(status_code=500, detail=f"Error generando seleccion: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generando selección: {str(e)}")
 
     session["selection"] = selection
     session["phase"] = 2
+    _persist(session_id)
 
     return {"session_id": session_id, "phase": 2, "selection": selection}
 
@@ -172,6 +280,7 @@ async def phase2_confirm(request: Request):
         session["selection"] = adjusted
 
     session["phase"] = 2
+    _persist(session_id)
     return {"session_id": session_id, "phase": 2, "status": "confirmed", "selection": session["selection"]}
 
 
@@ -179,10 +288,15 @@ async def phase2_confirm(request: Request):
 
 @app.post("/api/phase3/research")
 async def phase3_research(request: Request):
-    """Research competition for all selected products."""
+    """Research competition for all selected products.
+    If research is already done, return cached results."""
     body = await request.json()
     session_id = body.get("session_id")
     session = _get_session(session_id)
+
+    # Return cached results if already done
+    if session.get("research") and session.get("phase", 0) >= 3:
+        return {"session_id": session_id, "phase": 3, "research": session["research"]}
 
     if not session.get("selection"):
         raise HTTPException(status_code=400, detail="Primero completa la Fase 2")
@@ -207,6 +321,7 @@ async def phase3_research(request: Request):
 
     session["research"] = results
     session["phase"] = 3
+    _persist(session_id)
 
     return {"session_id": session_id, "phase": 3, "research": results}
 
@@ -218,6 +333,13 @@ async def phase3_research_stream(session_id: str):
     from starlette.responses import StreamingResponse
 
     session = _get_session(session_id)
+
+    # If already done, return immediately
+    if session.get("research") and session.get("phase", 0) >= 3:
+        async def done_stream():
+            yield f"data: {json.dumps({'done': True, 'total_researched': len(session['research'])})}\n\n"
+        return StreamingResponse(done_stream(), media_type="text/event-stream")
+
     selection = session.get("selection", {})
     all_products = (
         selection.get("stars", [])
@@ -248,9 +370,20 @@ async def phase3_research_stream(session_id: str):
         results = await task
         session["research"] = results
         session["phase"] = 3
+        _persist(session_id)
         yield f"data: {json.dumps({'done': True, 'total_researched': len(results)})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ── Get research results (read-only, no re-execution) ──
+@app.get("/api/phase3/results/{session_id}")
+async def phase3_results(session_id: str):
+    """Get cached research results without re-executing."""
+    session = _get_session(session_id)
+    if not session.get("research"):
+        raise HTTPException(status_code=404, detail="Research no completado aún")
+    return {"session_id": session_id, "phase": 3, "research": session["research"]}
 
 
 # ─────────────── PHASE 4: Strategic Analysis ───────────────
@@ -273,10 +406,11 @@ async def phase4_analyze(request: Request):
         )
     except Exception as e:
         logger.error(f"Strategic analysis error: {e}")
-        raise HTTPException(status_code=500, detail=f"Error en analisis: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error en análisis: {str(e)}")
 
     session["strategic"] = result
     session["phase"] = 4
+    _persist(session_id)
 
     return {"session_id": session_id, "phase": 4, "strategic": result}
 
@@ -352,6 +486,7 @@ async def phase5_generate(request: Request):
 
     session["phase"] = 5
     session["deliverables"] = deliverables
+    _persist(session_id)
 
     return {
         "session_id": session_id,

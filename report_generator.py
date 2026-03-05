@@ -894,38 +894,248 @@ def generate_excel_report(
         "Se Pisa con Otro?", "Diagnostico",
     ]
     _style_header(ws8, map_cols)
-    ws8.cell(row=2, column=1, value="(Datos a completar por el analista con el detalle de la categoria seleccionada)")
+
+    # Fill Sheet 8 with data from top products and analysis
+    row_idx_8 = 2
+    for prod in top20:
+        prod_name = prod.get(name_col, "")
+        prod_type = prod.get("Tipo", "")
+        prod_price = prod.get("Precio", "")
+        prod_ects = prod.get("Créditos", prod.get("ECTS", ""))
+        prod_total = prod.get("ventas_total", 0)
+        prod_growth = prod.get("crecimiento_pct", 0)
+        institution = prod.get("Institución Educativa", prod.get("Escuela", ""))
+
+        # Calculate per-year matriculas
+        yr_sales = []
+        for yc in year_cols:
+            yr_sales.append(prod.get(yc, 0))
+        last_yr_sales = yr_sales[-1] if yr_sales else 0
+
+        # Calculate ticket medio
+        imp_total = prod.get("importe_total", 0)
+        ticket_medio = round(imp_total / prod_total, 2) if prod_total > 0 and imp_total else prod_price
+
+        # Detect cannibalization: check if similar products exist
+        similar_count = sum(
+            1 for p in top20
+            if p.get(name_col, "") != prod_name
+            and p.get("Tipo", "") == prod_type
+            and _text_similarity(str(p.get(name_col, "")), str(prod_name)) > 0.3
+        )
+        cannibalization = "⚠️ SÍ" if similar_count >= 2 else ("⚠️ PARCIAL" if similar_count == 1 else "No")
+
+        # Diagnostic
+        if prod_growth > 15:
+            diagnostic = f"Producto en crecimiento ({prod_growth}%). Potenciar con más inversión en marketing."
+        elif prod_growth < -15:
+            diagnostic = f"Producto en declive ({prod_growth}%). Evaluar renovación o fusión."
+        elif prod_total == 0:
+            diagnostic = "Producto muerto. Considerar eliminación o rediseño completo."
+        elif last_yr_sales > 50:
+            diagnostic = f"Producto estrella con {last_yr_sales} matrículas último año. Mantener y optimizar."
+        else:
+            diagnostic = f"Producto estable con {last_yr_sales} matrículas. Monitorizar tendencia."
+
+        vals = [
+            prod_name, prod_type or prod_name, institution,
+            "España/LATAM", "", "", prod_price, prod_ects,
+            last_yr_sales, prod_total, ticket_medio,
+            cannibalization, diagnostic,
+        ]
+        for c_idx, v in enumerate(vals, 1):
+            cell = ws8.cell(row=row_idx_8, column=c_idx, value=v)
+            _style_cell(cell)
+            if c_idx == 12 and "SÍ" in str(v):
+                cell.fill = red_fill
+            elif c_idx == 12 and "PARCIAL" in str(v):
+                cell.fill = orange_fill
+        row_idx_8 += 1
+
     _auto_width(ws8)
 
     # ── Sheet 9: Demanda Estrategica ──
     ws9 = wb.create_sheet("Demanda Estrategica")
+
+    # Section 1: Inventory
     ws9.cell(row=1, column=1, value="SECCION 1: Inventario por Categoria").font = Font(name="Arial", size=12, bold=True, color="1B2A4A")
-    inv_cols = ["Producto", "Tipo", "Precio", "ECTS", "Matriculas/Ano", "Tendencia", "Estado", "Valoracion Estrategica"]
+    ws9.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    inv_cols = ["Producto", "Tipo", "Precio", "ECTS", "Matriculas Ultimo Año", "Tendencia", "Estado", "Valoracion Estrategica"]
     for c_idx, col in enumerate(inv_cols, 1):
         cell = ws9.cell(row=2, column=c_idx, value=col)
         cell.font = header_font
         cell.fill = header_fill
-    ws9.cell(row=3, column=1, value="(Datos a completar)")
+        cell.border = thin_border
 
-    row = 6
-    ws9.cell(row=row, column=1, value="SECCION 2: Huecos Criticos").font = Font(name="Arial", size=12, bold=True, color="1B2A4A")
+    row_idx_9 = 3
+    for prod in top20:
+        prod_name = prod.get(name_col, "")
+        prod_type = prod.get("Tipo", "")
+        prod_price = prod.get("Precio", "")
+        prod_ects = prod.get("Créditos", prod.get("ECTS", ""))
+        prod_total = prod.get("ventas_total", 0)
+        prod_growth = prod.get("crecimiento_pct", 0)
+
+        # Last year sales
+        yr_sales = [prod.get(yc, 0) for yc in year_cols]
+        last_yr_sales = yr_sales[-1] if yr_sales else 0
+
+        # Trend
+        if prod_growth > 15:
+            trend = f"📈 +{prod_growth}%"
+        elif prod_growth < -15:
+            trend = f"📉 {prod_growth}%"
+        elif prod_growth > 0:
+            trend = f"↗️ +{prod_growth}%"
+        elif prod_growth < 0:
+            trend = f"↘️ {prod_growth}%"
+        else:
+            trend = "→ 0%"
+
+        # Status
+        if prod_total == 0:
+            status = "❌ Muerto"
+            status_fill = red_fill
+        elif prod_growth > 30:
+            status = "🚀 Nuevo/Emergente"
+            status_fill = green_fill
+        elif prod_growth < -25:
+            status = "⚠️ En caída"
+            status_fill = orange_fill
+        elif last_yr_sales > 50:
+            status = "✅ Activo (estrella)"
+            status_fill = green_fill
+        else:
+            status = "✅ Activo"
+            status_fill = PatternFill()
+
+        # Valuation
+        if prod_total > 200:
+            valuation = "Producto core. Priorizar en renovación y marketing."
+        elif prod_growth > 20:
+            valuation = "Alto potencial de crecimiento. Invertir en posicionamiento."
+        elif prod_growth < -20:
+            valuation = "Evaluar renovación urgente. Comparar con competencia."
+        elif prod_total == 0:
+            valuation = "Eliminar o rediseñar completamente."
+        else:
+            valuation = "Producto estándar. Mantener y monitorizar."
+
+        vals = [prod_name, prod_type, prod_price, prod_ects, last_yr_sales, trend, status, valuation]
+        for c_idx, v in enumerate(vals, 1):
+            cell = ws9.cell(row=row_idx_9, column=c_idx, value=v)
+            _style_cell(cell)
+            if c_idx == 7:
+                cell.fill = status_fill
+        row_idx_9 += 1
+
+    # Section 2: Gaps
+    row_idx_9 += 2
+    ws9.cell(row=row_idx_9, column=1, value="SECCION 2: Huecos Criticos").font = Font(name="Arial", size=12, bold=True, color="1B2A4A")
+    ws9.merge_cells(start_row=row_idx_9, start_column=1, end_row=row_idx_9, end_column=8)
+    row_idx_9 += 1
     gap_cols = ["Area/Idioma", "Tiene Producto", "Version Universitaria", "Prep. Examen", "Certificacion", "Hueco Detectado", "Prioridad", "Accion Propuesta"]
     for c_idx, col in enumerate(gap_cols, 1):
-        cell = ws9.cell(row=row + 1, column=c_idx, value=col)
+        cell = ws9.cell(row=row_idx_9, column=c_idx, value=col)
         cell.font = header_font
         cell.fill = header_fill
+        cell.border = thin_border
+    row_idx_9 += 1
 
-    row = 10
-    ws9.cell(row=row, column=1, value="SECCION 3: Propuesta Nueva Linea").font = Font(name="Arial", size=12, bold=True, color="1B2A4A")
+    # Fill gaps from new_products proposals
+    for np_ in new_products:
+        gap_name = np_.get("faculty", np_.get("school", ""))
+        vals = [
+            gap_name,
+            "No",
+            "No" if "universitari" not in str(np_.get("type", "")).lower() else "Sí",
+            "Sí" if "examen" in str(np_.get("key_attributes", [])).lower() else "No",
+            "Sí" if any(kw in str(np_.get("key_attributes", [])).lower() for kw in ["certificac", "acreditac"]) else "No",
+            np_.get("strategic_justification", "Hueco detectado en el mercado"),
+            np_.get("priority", "media").capitalize(),
+            f"Crear: {np_.get('name', '')} ({np_.get('type', '')})",
+        ]
+        for c_idx, v in enumerate(vals, 1):
+            cell = ws9.cell(row=row_idx_9, column=c_idx, value=v)
+            _style_cell(cell)
+            prio = np_.get("priority", "")
+            if c_idx == 7:
+                cell.fill = {"alta": red_fill, "media": orange_fill, "baja": green_fill}.get(prio, PatternFill())
+        row_idx_9 += 1
+
+    # Section 3: New product line
+    row_idx_9 += 2
+    ws9.cell(row=row_idx_9, column=1, value="SECCION 3: Propuesta Nueva Linea").font = Font(name="Arial", size=12, bold=True, color="1B2A4A")
+    ws9.merge_cells(start_row=row_idx_9, start_column=1, end_row=row_idx_9, end_column=12)
+    row_idx_9 += 1
     line_cols = ["Nombre", "Area", "Tipo", "Precio", "Horas", "ECTS", "Institucion", "Publico", "Prep. Examen", "Certificacion", "Atributos", "Justificacion"]
     for c_idx, col in enumerate(line_cols, 1):
-        cell = ws9.cell(row=row + 1, column=c_idx, value=col)
+        cell = ws9.cell(row=row_idx_9, column=c_idx, value=col)
         cell.font = header_font
         cell.fill = header_fill
+        cell.border = thin_border
+    row_idx_9 += 1
 
-    row = 14
-    ws9.cell(row=row, column=1, value="SECCION 4: Datos de Contexto de Mercado").font = Font(name="Arial", size=12, bold=True, color="1B2A4A")
-    ws9.cell(row=row + 1, column=1, value="(Datos de mercado a completar por el analista)")
+    for np_ in new_products:
+        attrs = np_.get("key_attributes", [])
+        has_exam = "Sí" if any("examen" in str(a).lower() for a in attrs) else "No"
+        has_cert = "Sí" if any(kw in str(a).lower() for a in attrs for kw in ["certificac", "acreditac"]) else "No"
+        hours_ects = str(np_.get("hours_ects", ""))
+        hours = ""
+        ects = ""
+        if "/" in hours_ects:
+            parts = hours_ects.split("/")
+            hours = parts[0].strip()
+            ects = parts[1].strip() if len(parts) > 1 else ""
+        else:
+            hours = hours_ects
+
+        vals = [
+            np_.get("name", ""),
+            np_.get("faculty", np_.get("school", "")),
+            np_.get("type", ""),
+            np_.get("recommended_price", ""),
+            hours, ects,
+            np_.get("institution", ""),
+            "",  # Publico
+            has_exam, has_cert,
+            ", ".join(attrs) if isinstance(attrs, list) else str(attrs),
+            np_.get("strategic_justification", ""),
+        ]
+        for c_idx, v in enumerate(vals, 1):
+            cell = ws9.cell(row=row_idx_9, column=c_idx, value=v)
+            _style_cell(cell)
+        row_idx_9 += 1
+
+    # Section 4: Market context
+    row_idx_9 += 2
+    ws9.cell(row=row_idx_9, column=1, value="SECCION 4: Datos de Contexto de Mercado").font = Font(name="Arial", size=12, bold=True, color="1B2A4A")
+    ws9.merge_cells(start_row=row_idx_9, start_column=1, end_row=row_idx_9, end_column=8)
+    row_idx_9 += 1
+
+    # Add market context from strategic analysis and research
+    market_notes = []
+    for res in research_results:
+        note = res.get("market_notes", "")
+        if note and note != "No se pudo parsear la respuesta estructurada.":
+            market_notes.append(f"[{res.get('our_product', '?')}] {note}")
+
+    strategic_summary = strategic_data.get("strategic_summary", "")
+    if strategic_summary:
+        market_notes.insert(0, f"[Resumen Estratégico] {strategic_summary}")
+
+    exec_summary = proposals.get("executive_summary", "")
+    if exec_summary:
+        market_notes.append(f"[Propuestas] {exec_summary}")
+
+    if not market_notes:
+        market_notes = ["Datos de mercado recopilados durante el research de competencia."]
+
+    for note in market_notes[:10]:
+        cell = ws9.cell(row=row_idx_9, column=1, value=note)
+        _style_cell(cell)
+        ws9.merge_cells(start_row=row_idx_9, start_column=1, end_row=row_idx_9, end_column=8)
+        row_idx_9 += 1
 
     _auto_width(ws9)
 
@@ -936,3 +1146,15 @@ def generate_excel_report(
 def _truncate(s: str, max_len: int) -> str:
     s = str(s)
     return s[:max_len] + "..." if len(s) > max_len else s
+
+
+def _text_similarity(a: str, b: str) -> float:
+    """Simple word overlap similarity between two strings."""
+    if not a or not b:
+        return 0.0
+    words_a = set(a.lower().split())
+    words_b = set(b.lower().split())
+    if not words_a or not words_b:
+        return 0.0
+    overlap = words_a & words_b
+    return len(overlap) / max(len(words_a), len(words_b))

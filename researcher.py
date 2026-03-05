@@ -1,20 +1,24 @@
 """
 researcher.py — Competition research module using Anthropic Claude API
 with web_search_20250305 tool for real web searches.
+Includes retry logic and rate-limit handling.
 """
 
 import os
 import json
 import asyncio
 import logging
-from typing import Optional
+from datetime import datetime
+from typing import Optional, Callable
 import anthropic
 
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-MODEL = "claude-sonnet-4-20250514"
-MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_SEARCHES", "3"))
+MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_SEARCHES", "2"))
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+RETRY_BASE_DELAY = 5  # seconds
 
 # Brands that belong to EDUCA EDTECH Group — never treat as competition
 EDUCA_BRANDS = [
@@ -40,7 +44,84 @@ Si las encuentras, etiquétalas como "Grupo EDUCA":
 
 
 def _get_client():
+    if not ANTHROPIC_API_KEY:
+        raise ValueError(
+            "ANTHROPIC_API_KEY no está configurada. "
+            "Establécela como variable de entorno."
+        )
     return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+
+def _current_year() -> str:
+    """Return current year as string for search queries."""
+    return str(datetime.now().year)
+
+
+async def _call_claude_with_retry(
+    client,
+    messages: list,
+    max_tokens: int = 4096,
+    tools: list = None,
+) -> object:
+    """
+    Call Claude API with exponential backoff retry on rate limits and transient errors.
+    """
+    for attempt in range(MAX_RETRIES):
+        try:
+            kwargs = {
+                "model": MODEL,
+                "max_tokens": max_tokens,
+                "messages": messages,
+            }
+            if tools:
+                kwargs["tools"] = tools
+
+            response = await asyncio.to_thread(
+                client.messages.create, **kwargs
+            )
+            return response
+
+        except anthropic.RateLimitError as e:
+            delay = RETRY_BASE_DELAY * (2 ** attempt)
+            logger.warning(
+                f"Rate limit hit (attempt {attempt + 1}/{MAX_RETRIES}). "
+                f"Waiting {delay}s before retry..."
+            )
+            await asyncio.sleep(delay)
+            if attempt == MAX_RETRIES - 1:
+                raise
+
+        except anthropic.APIStatusError as e:
+            if e.status_code >= 500:
+                delay = RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    f"API error {e.status_code} (attempt {attempt + 1}/{MAX_RETRIES}). "
+                    f"Waiting {delay}s..."
+                )
+                await asyncio.sleep(delay)
+                if attempt == MAX_RETRIES - 1:
+                    raise
+            else:
+                raise
+
+        except Exception as e:
+            if attempt == MAX_RETRIES - 1:
+                raise
+            delay = RETRY_BASE_DELAY * (2 ** attempt)
+            logger.warning(f"Unexpected error: {e}. Retrying in {delay}s...")
+            await asyncio.sleep(delay)
+
+
+def _extract_json_from_text(text: str) -> dict:
+    """Safely extract JSON from Claude's response text."""
+    try:
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0]
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0]
+        return json.loads(text.strip())
+    except json.JSONDecodeError:
+        return None
 
 
 async def propose_selection(analysis_data: dict) -> dict:
@@ -79,25 +160,17 @@ Responde SOLO con un JSON válido con esta estructura:
   "summary": "Resumen ejecutivo de la selección en 2-3 frases."
 }}"""
 
-    response = await asyncio.to_thread(
-        client.messages.create,
-        model=MODEL,
-        max_tokens=4096,
+    response = await _call_claude_with_retry(
+        client,
         messages=[{"role": "user", "content": prompt}],
     )
 
     text = response.content[0].text
-    # Extract JSON from response
-    try:
-        # Try to find JSON block
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
-        return json.loads(text.strip())
-    except json.JSONDecodeError:
-        logger.warning("Could not parse selection JSON, returning raw text")
-        return {"raw_response": text, "stars": [], "emerging": [], "at_risk": []}
+    result = _extract_json_from_text(text)
+    if result:
+        return result
+    logger.warning("Could not parse selection JSON, returning raw text")
+    return {"raw_response": text, "stars": [], "emerging": [], "at_risk": []}
 
 
 async def research_single_product(product: dict, category: str) -> dict:
@@ -111,7 +184,6 @@ async def research_single_product(product: dict, category: str) -> dict:
     product_price = product.get("price", "No disponible")
     product_hours = product.get("hours", "No disponible")
 
-    # Build search strategy based on product type
     search_queries = _build_search_queries(product_name, product_type)
 
     prompt = f"""Eres un investigador de mercado de formación online para EDUCA EDTECH Group.
@@ -164,12 +236,10 @@ Responde SOLO con un JSON válido:
 }}"""
 
     try:
-        response = await asyncio.to_thread(
-            client.messages.create,
-            model=MODEL,
-            max_tokens=4096,
-            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 10}],
+        response = await _call_claude_with_retry(
+            client,
             messages=[{"role": "user", "content": prompt}],
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 10}],
         )
 
         # Process the response — may have multiple content blocks
@@ -180,25 +250,18 @@ Responde SOLO con un JSON válido:
 
         full_text = "\n".join(text_parts)
 
-        # Extract JSON
-        try:
-            if "```json" in full_text:
-                json_str = full_text.split("```json")[1].split("```")[0]
-            elif "```" in full_text:
-                json_str = full_text.split("```")[1].split("```")[0]
-            else:
-                json_str = full_text
-            result = json.loads(json_str.strip())
+        result = _extract_json_from_text(full_text)
+        if result:
             result["status"] = "success"
             return result
-        except json.JSONDecodeError:
-            return {
-                "our_product": product_name,
-                "competitors": [],
-                "status": "partial",
-                "raw_response": full_text[:2000],
-                "market_notes": "No se pudo parsear la respuesta estructurada.",
-            }
+
+        return {
+            "our_product": product_name,
+            "competitors": [],
+            "status": "partial",
+            "raw_response": full_text[:2000],
+            "market_notes": "No se pudo parsear la respuesta estructurada.",
+        }
 
     except Exception as e:
         logger.error(f"Error researching {product_name}: {e}")
@@ -211,7 +274,7 @@ Responde SOLO con un JSON válido:
 
 
 async def research_all_products(
-    products: list, category: str, progress_callback=None
+    products: list, category: str, progress_callback: Optional[Callable] = None
 ) -> list:
     """
     Research all selected products with concurrency limit.
@@ -310,22 +373,17 @@ Responde SOLO con JSON válido:
   "strategic_summary": "Resumen estratégico en 3-4 frases."
 }}"""
 
-    response = await asyncio.to_thread(
-        client.messages.create,
-        model=MODEL,
-        max_tokens=6000,
+    response = await _call_claude_with_retry(
+        client,
         messages=[{"role": "user", "content": prompt}],
+        max_tokens=6000,
     )
 
     text = response.content[0].text
-    try:
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
-        return json.loads(text.strip())
-    except json.JSONDecodeError:
-        return {"raw_response": text}
+    result = _extract_json_from_text(text)
+    if result:
+        return result
+    return {"raw_response": text}
 
 
 async def generate_proposals(
@@ -395,27 +453,21 @@ Responde SOLO con JSON válido:
   "executive_summary": "Resumen de las propuestas en 3-4 frases."
 }}"""
 
-    response = await asyncio.to_thread(
-        client.messages.create,
-        model=MODEL,
-        max_tokens=6000,
+    response = await _call_claude_with_retry(
+        client,
         messages=[{"role": "user", "content": prompt}],
+        max_tokens=6000,
     )
 
     text = response.content[0].text
-    try:
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
-        return json.loads(text.strip())
-    except json.JSONDecodeError:
-        return {"raw_response": text}
+    result = _extract_json_from_text(text)
+    if result:
+        return result
+    return {"raw_response": text}
 
 
 def _build_search_queries(product_name: str, product_type: str) -> list:
     """Build search queries based on product type."""
-    # Extract topic from product name (remove common prefixes)
     topic = product_name
     for prefix in [
         "Máster en ", "Master en ", "Curso de ", "Curso en ",
@@ -426,7 +478,7 @@ def _build_search_queries(product_name: str, product_type: str) -> list:
             break
 
     ptype = product_type.lower() if product_type else "curso"
-    year = "2025"
+    year = _current_year()
 
     if "máster" in ptype or "master" in ptype:
         return [
@@ -444,6 +496,18 @@ def _build_search_queries(product_name: str, product_type: str) -> list:
         return [
             f"microcredencial {topic} universidad",
             f"certificado corto {topic} online",
+        ]
+    elif "licenciatura" in ptype or "grado" in ptype:
+        return [
+            f"licenciatura {topic} online",
+            f"grado {topic} universidad online {year}",
+            f"carrera {topic} online precio",
+        ]
+    elif "maestría" in ptype:
+        return [
+            f"maestría {topic} online",
+            f"maestría {topic} universidad online {year}",
+            f"master {topic} online precio ECTS",
         ]
     else:
         return [
