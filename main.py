@@ -366,14 +366,26 @@ async def phase3_research_stream(session_id: str):
             yield f"data: {data}\n\n"
             await asyncio.sleep(2)
 
-        # Final result
-        results = await task
-        session["research"] = results
-        session["phase"] = 3
-        _persist(session_id)
-        yield f"data: {json.dumps({'done': True, 'total_researched': len(results)})}\n\n"
+        # Final result — wrap in try/except to always send done event
+        try:
+            results = await task
+            session["research"] = results
+            session["phase"] = 3
+            _persist(session_id)
+            yield f"data: {json.dumps({'done': True, 'total_researched': len(results)})}\n\n"
+        except Exception as e:
+            logger.error(f"Research task error: {e}")
+            yield f"data: {json.dumps({'done': True, 'error': str(e), 'total_researched': 0})}\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx/proxy buffering
+        },
+    )
 
 
 # ── Get research results (read-only, no re-execution) ──

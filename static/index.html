@@ -454,31 +454,74 @@ async function runPhase3() {
     fill.style.width = '5%';
     status.textContent = 'Iniciando research de competencia...';
 
+    let lastProgress = 0;
+    let sseErrorCount = 0;
+
     try {
         // Use SSE for progress
         const evtSource = new EventSource(`/api/phase3/research/stream?session_id=${state.sessionId}`);
         evtSource.onmessage = (e) => {
+            sseErrorCount = 0; // Reset error count on successful message
             const d = JSON.parse(e.data);
             if (d.done) {
                 evtSource.close();
                 fill.style.width = '100%';
-                status.textContent = `Research completado: ${d.total_researched} productos investigados.`;
-                // Fetch full results
-                fetchResearchResults();
+                if (d.error) {
+                    showError('phase3', 'Error en research: ' + d.error);
+                    status.textContent = 'Error en research.';
+                } else {
+                    status.textContent = `Research completado: ${d.total_researched} productos investigados.`;
+                    fetchResearchResults();
+                }
                 return;
             }
-            const pct = Math.round((d.current / d.total) * 100);
-            fill.style.width = pct + '%';
+            if (d.total > 0) {
+                const pct = Math.round((d.current / d.total) * 100);
+                fill.style.width = pct + '%';
+                lastProgress = d.current;
+            }
             status.textContent = `Investigando: ${d.current_product} (${d.current}/${d.total})`;
         };
         evtSource.onerror = () => {
-            evtSource.close();
-            // Fallback: direct request
-            runPhase3Direct();
+            sseErrorCount++;
+            // SSE connections can temporarily drop — only give up after 3 consecutive errors
+            if (sseErrorCount >= 3) {
+                evtSource.close();
+                // If we had significant progress, try to fetch cached results first
+                if (lastProgress > 0) {
+                    status.textContent = 'Conexion interrumpida, recuperando resultados...';
+                    fetchResearchResultsWithRetry();
+                } else {
+                    runPhase3Direct();
+                }
+            }
         };
     } catch (e) {
         runPhase3Direct();
     }
+}
+
+async function fetchResearchResultsWithRetry() {
+    const fill = document.getElementById('researchFill');
+    const status = document.getElementById('researchStatus');
+    // Retry a few times with delay — results may not be saved yet
+    for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+            const r = await fetch(`/api/phase3/results/${state.sessionId}`);
+            if (r.ok) {
+                const data = await r.json();
+                state.research = data.research;
+                fill.style.width = '100%';
+                status.textContent = 'Research completado.';
+                renderPhase3(data.research);
+                return;
+            }
+        } catch (e) { /* retry */ }
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        status.textContent = `Recuperando resultados (intento ${attempt + 2})...`;
+    }
+    // All retries failed — fall back to direct request
+    runPhase3Direct();
 }
 
 async function runPhase3Direct() {
