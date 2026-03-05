@@ -16,9 +16,10 @@ logger = logging.getLogger(__name__)
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
-MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_SEARCHES", "2"))
+RESEARCH_MODEL = os.getenv("RESEARCH_MODEL", "claude-haiku-4-5-20251001")
+MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_SEARCHES", "3"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "5"))
-RETRY_BASE_DELAY = 15  # seconds
+RETRY_BASE_DELAY = 10  # seconds
 
 # Brands that belong to EDUCA EDTECH Group — never treat as competition
 EDUCA_BRANDS = [
@@ -62,6 +63,7 @@ async def _call_claude_with_retry(
     messages: list,
     max_tokens: int = 4096,
     tools: list = None,
+    model: str = None,
 ) -> object:
     """
     Call Claude API with exponential backoff retry on rate limits and transient errors.
@@ -69,7 +71,7 @@ async def _call_claude_with_retry(
     for attempt in range(MAX_RETRIES):
         try:
             kwargs = {
-                "model": MODEL,
+                "model": model or MODEL,
                 "max_tokens": max_tokens,
                 "messages": messages,
             }
@@ -186,60 +188,20 @@ async def research_single_product(product: dict, category: str) -> dict:
 
     search_queries = _build_search_queries(product_name, product_type)
 
-    prompt = f"""Eres un investigador de mercado de formación online para EDUCA EDTECH Group.
+    educa_list = ", ".join(EDUCA_BRANDS[:10])
+    prompt = f"""Investiga competencia online para: {product_name} ({product_type}, {product_price}€, {product_hours}h, categoría: {category}).
 
-Tu tarea: investigar la competencia para este producto nuestro:
-- **Producto**: {product_name}
-- **Tipo**: {product_type}
-- **Precio**: {product_price}
-- **Horas**: {product_hours}
-- **Categoría**: {category}
+Busca 3-5 competidores. Marcas EDUCA EDTECH ({educa_list}) NO son competencia, etiquétalas "Grupo EDUCA".
 
-{EDUCA_BRANDS_NOTE}
-
-{COMPETITOR_CONTEXT}
-
-INSTRUCCIONES:
-1. Busca en la web productos competidores similares al nuestro.
-2. Usa queries como: {json.dumps(search_queries, ensure_ascii=False)}
-3. Para cada competidor encontrado, extrae:
-   - Nombre del competidor (institución)
-   - Nombre exacto del producto
-   - Precio (o "Bajo consulta" con rango estimado)
-   - Horas lectivas
-   - Créditos ECTS
-   - Tipo de titulación (Oficial, Propio, Certificado, etc.)
-   - Atributos de valor: oposiciones, habilitante, prácticas, metodología, financiación, becas
-   - URL de la página del producto
-   - Diferenciador clave
-4. Encuentra al menos 3-5 competidores.
-5. Si encuentras marcas del grupo EDUCA, etiquétalas como "Grupo EDUCA".
-
-Responde SOLO con un JSON válido:
-{{
-  "our_product": "{product_name}",
-  "competitors": [
-    {{
-      "competitor_name": "...",
-      "product_name": "...",
-      "price": "...",
-      "hours": "...",
-      "ects": "...",
-      "degree_type": "...",
-      "value_attributes": "...",
-      "url": "...",
-      "key_differentiator": "...",
-      "is_educa_group": false
-    }}
-  ],
-  "market_notes": "Observaciones generales del mercado para este tipo de producto."
-}}"""
+Responde SOLO JSON:
+{{"our_product":"{product_name}","competitors":[{{"competitor_name":"...","product_name":"...","price":"...","hours":"...","ects":"...","degree_type":"...","value_attributes":"...","url":"...","key_differentiator":"...","is_educa_group":false}}],"market_notes":"..."}}"""
 
     try:
         response = await _call_claude_with_retry(
             client,
             messages=[{"role": "user", "content": prompt}],
-            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 10}],
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}],
+            model=RESEARCH_MODEL,
         )
 
         # Process the response — may have multiple content blocks
