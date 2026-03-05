@@ -404,12 +404,11 @@ def _df_to_records(df: pd.DataFrame, cols: list) -> list:
     records = df[available_cols].to_dict("records")
     for r in records:
         for k, v in r.items():
-            if isinstance(v, float) and (pd.isna(v) or np.isnan(v)):
+            if isinstance(v, (float, np.floating)) and (pd.isna(v) or np.isnan(v)):
                 r[k] = None
-            elif isinstance(v, float) and v == int(v):
-                r[k] = int(v)
             elif isinstance(v, (np.integer,)):
                 r[k] = int(v)
-            elif isinstance(v, (np.floating,)):
-                r[k] = round(float(v), 2)
+            elif isinstance(v, (float, np.floating)):
+                fv = round(float(v), 2)
+                r[k] = int(fv) if fv == int(fv) else fv
     return records

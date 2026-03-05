@@ -3,7 +3,7 @@ uvicorn[standard]==0.30.6
 python-multipart==0.0.9
 pandas==2.2.2
 openpyxl==3.1.5
-anthropic==0.39.0
+anthropic>=0.45.0
 matplotlib==3.9.2
 playwright==1.48.0
 aiofiles==24.1.0
