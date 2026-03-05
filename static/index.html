@@ -455,7 +455,23 @@ async function runPhase3() {
     status.textContent = 'Iniciando research de competencia...';
 
     let lastProgress = 0;
+    let lastTotal = 0;
     let sseErrorCount = 0;
+    let completionTimer = null;
+    let alreadyRecovering = false;
+
+    function startCompletionTimer(evtSource) {
+        // If all products are done (current === total), wait 30s then auto-recover
+        if (completionTimer) clearTimeout(completionTimer);
+        completionTimer = setTimeout(() => {
+            if (!alreadyRecovering) {
+                alreadyRecovering = true;
+                evtSource.close();
+                status.textContent = 'Finalizando research, recuperando resultados...';
+                fetchResearchResultsWithRetry();
+            }
+        }, 30000);
+    }
 
     try {
         // Use SSE for progress
@@ -464,6 +480,8 @@ async function runPhase3() {
             sseErrorCount = 0; // Reset error count on successful message
             const d = JSON.parse(e.data);
             if (d.done) {
+                if (completionTimer) clearTimeout(completionTimer);
+                alreadyRecovering = true;
                 evtSource.close();
                 fill.style.width = '100%';
                 if (d.error) {
@@ -479,15 +497,29 @@ async function runPhase3() {
                 const pct = Math.round((d.current / d.total) * 100);
                 fill.style.width = pct + '%';
                 lastProgress = d.current;
+                lastTotal = d.total;
+                // If progress reaches 100%, start a safety timer
+                if (d.current >= d.total) {
+                    startCompletionTimer(evtSource);
+                }
             }
             status.textContent = `Investigando: ${d.current_product} (${d.current}/${d.total})`;
         };
         evtSource.onerror = () => {
             sseErrorCount++;
-            // SSE connections can temporarily drop — only give up after 3 consecutive errors
-            if (sseErrorCount >= 3) {
+            // If all products were done, go straight to recovery
+            if (lastProgress > 0 && lastProgress >= lastTotal && !alreadyRecovering) {
+                alreadyRecovering = true;
+                if (completionTimer) clearTimeout(completionTimer);
                 evtSource.close();
-                // If we had significant progress, try to fetch cached results first
+                status.textContent = 'Conexion interrumpida, recuperando resultados...';
+                fetchResearchResultsWithRetry();
+                return;
+            }
+            // SSE connections can temporarily drop — only give up after 3 consecutive errors
+            if (sseErrorCount >= 3 && !alreadyRecovering) {
+                alreadyRecovering = true;
+                evtSource.close();
                 if (lastProgress > 0) {
                     status.textContent = 'Conexion interrumpida, recuperando resultados...';
                     fetchResearchResultsWithRetry();
