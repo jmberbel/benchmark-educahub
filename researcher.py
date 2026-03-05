@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 RESEARCH_MODEL = os.getenv("RESEARCH_MODEL", "claude-haiku-4-5-20251001")
-MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_SEARCHES", "3"))
+MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_SEARCHES", "5"))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "5"))
 RETRY_BASE_DELAY = 10  # seconds
 
@@ -235,7 +235,7 @@ Responde SOLO con JSON válido:
         response = await _call_claude_with_retry(
             client,
             messages=[{"role": "user", "content": prompt}],
-            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 7}],
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
             model=RESEARCH_MODEL,
         )
 
