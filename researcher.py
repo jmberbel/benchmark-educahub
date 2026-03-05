@@ -128,41 +128,58 @@ def _extract_json_from_text(text: str) -> dict:
 
 async def propose_selection(analysis_data: dict) -> dict:
     """
-    Phase 2: Based on analysis, propose products for benchmark.
+    Phase 2: Based on analysis, propose SPECIFIC products for benchmark.
     Returns structured selection with stars, emerging, and at-risk products.
     """
     client = _get_client()
 
-    # Compact data to reduce tokens
-    top_products = [
-        {k: p.get(k) for k in ["IDIOMA", "Producto", "Precio", "Créditos", "ventas_total", "crecimiento_pct"] if p.get(k) is not None}
-        for p in analysis_data.get('top_20', [])[:15]
-    ]
-    emerging = [
-        {k: p.get(k) for k in ["IDIOMA", "Producto", "ventas_total", "crecimiento_pct"] if p.get(k) is not None}
-        for p in analysis_data.get('emerging', [])[:8]
-    ]
-    declining = [
-        {k: p.get(k) for k in ["IDIOMA", "Producto", "ventas_total", "crecimiento_pct"] if p.get(k) is not None}
-        for p in analysis_data.get('declining', [])[:8]
-    ]
+    # Send ALL product data with full detail for better selection
+    name_col = analysis_data.get("name_column", "Producto")
+    all_products = analysis_data.get("top_20", [])[:20]
+    emerging = analysis_data.get("emerging", [])[:10]
+    declining = analysis_data.get("declining", [])[:10]
+    dead = analysis_data.get("dead_products", [])[:10]
 
-    prompt = f"""Analista de producto formativo. Selecciona productos para benchmark competitivo.
+    prompt = f"""Eres analista de producto formativo senior de EDUCA EDTECH Group.
 
-KPIs: {json.dumps(analysis_data.get('kpis', {}), ensure_ascii=False)}
-Top productos: {json.dumps(top_products, ensure_ascii=False)}
-Emergentes (+15%): {json.dumps(emerging, ensure_ascii=False)}
-En declive (-15%): {json.dumps(declining, ensure_ascii=False)}
+DATOS DE ANÁLISIS DE VENTAS:
+- KPIs: {json.dumps(analysis_data.get('kpis', {}), ensure_ascii=False)}
+- Top 20 productos (con todos sus datos): {json.dumps(all_products, ensure_ascii=False)}
+- Productos emergentes (+15% crecimiento): {json.dumps(emerging, ensure_ascii=False)}
+- Productos en declive (-15%): {json.dumps(declining, ensure_ascii=False)}
+- Productos muertos: {json.dumps(dead, ensure_ascii=False)}
+
+INSTRUCCIONES CRÍTICAS:
+- Selecciona productos ESPECÍFICOS con su nombre EXACTO del Excel, precio real e información detallada
+- NO agrupes por categoría genérica (ej: NO "ELE" genérico, SÍ "Curso de Profesor de Español para Extranjeros ELE - 260€ - 8 ECTS")
+- Incluye el precio, horas y créditos reales de cada producto
+- El campo "name" debe ser la denominación exacta del producto como aparece en el Excel
+- El campo "type" debe indicar el tipo: Curso, Máster, Postgrado, Microcredencial, etc.
 
 Propón:
-1. Estrellas (5-10): más vendidos
-2. Emergentes (3-5): mayor crecimiento
-3. En riesgo (3-5): mayor caída
+1. **Productos estrella** (5-10): los más vendidos, generan el grueso del revenue. Selecciona los productos individuales concretos.
+2. **Productos emergentes** (3-5): mayor crecimiento reciente, potencial de scaling.
+3. **Productos en riesgo** (3-5): mayor caída sostenida, candidatos a renovar o sustituir.
 
-Para cada uno: name, type, price, hours, total_sales, growth_pct, reason.
+Para cada producto incluye TODOS estos campos con datos reales del Excel:
+- name: denominación exacta del producto
+- type: tipo de producto (Curso/Máster/Postgrado/etc.)
+- price: precio real en euros
+- hours: horas lectivas (si disponible)
+- ects: créditos ECTS (si disponible)
+- total_sales: ventas totales acumuladas
+- growth_pct: porcentaje de crecimiento interanual
+- reason: razón de selección con datos concretos
 
-Responde SOLO JSON:
-{{"stars":[{{"name":"...","type":"...","price":0,"hours":0,"total_sales":0,"growth_pct":0,"reason":"..."}}],"emerging":[...],"at_risk":[...],"summary":"Resumen en 2 frases."}}"""
+Responde SOLO con JSON válido:
+{{
+  "stars": [
+    {{"name": "Denominación exacta", "type": "Curso", "price": 260, "hours": 200, "ects": 8, "total_sales": 480, "growth_pct": -57, "reason": "Producto estrella en ventas con..."}}
+  ],
+  "emerging": [...],
+  "at_risk": [...],
+  "summary": "Resumen ejecutivo de la selección en 2-3 frases."
+}}"""
 
     response = await _call_claude_with_retry(
         client,
@@ -188,6 +205,7 @@ async def research_single_product(product: dict, category: str) -> dict:
     product_type = product.get("type", "Curso")
     product_price = product.get("price", "No disponible")
     product_hours = product.get("hours", "No disponible")
+    product_ects = product.get("ects", "No disponible")
 
     search_queries = _build_search_queries(product_name, product_type)
 
@@ -197,11 +215,12 @@ async def research_single_product(product: dict, category: str) -> dict:
 - Tipo: {product_type}
 - Precio: {product_price}€
 - Horas: {product_hours}
+- ECTS: {product_ects}
 - Categoría: {category}
 
 INSTRUCCIONES:
 1. Busca con queries como: {json.dumps(search_queries[:2], ensure_ascii=False)}
-2. Encuentra 3-5 competidores reales. Prioriza: UNIR, VIU, UDIMA, UOC, IMF, CEREM, ISEP, OBS, IEBS, Campus Training, MasterD.
+2. Encuentra 3-5 competidores reales. Prioriza: UNIR, VIU, UDIMA, UOC, IMF, CEREM, ISEP, OBS, IEBS, Campus Training, MasterD, Oxford House, Instituto Cervantes.
 3. Para cada competidor extrae de su web:
    - Precio exacto (o "Bajo consulta" con rango estimado)
    - Horas lectivas y créditos ECTS
@@ -320,6 +339,22 @@ async def strategic_analysis(
     """
     client = _get_client()
 
+    # Build a richer competitor summary for better analysis
+    competitor_summary = []
+    for r in research_results:
+        if r.get("competitors"):
+            for c in r["competitors"]:
+                competitor_summary.append({
+                    "our_product": r.get("our_product", "?"),
+                    "competitor": c.get("competitor_name", "?"),
+                    "product": c.get("product_name", "?"),
+                    "price": c.get("price", "?"),
+                    "ects": c.get("ects", "?"),
+                    "degree_type": c.get("degree_type", "?"),
+                    "value_attrs": c.get("value_attributes", "?"),
+                    "differentiator": c.get("key_differentiator", "?"),
+                })
+
     prompt = f"""Eres un estratega de producto formativo senior de EDUCA EDTECH Group.
 
 DATOS INTERNOS DE VENTAS:
@@ -330,50 +365,54 @@ PRODUCTOS SELECCIONADOS:
 - Emergentes: {json.dumps(selected_products.get('emerging', []), ensure_ascii=False)}
 - En riesgo: {json.dumps(selected_products.get('at_risk', []), ensure_ascii=False)}
 
-RESEARCH DE COMPETENCIA:
-{json.dumps(research_results, ensure_ascii=False, default=str)[:8000]}
+MAPA COMPETITIVO COMPLETO ({len(competitor_summary)} competidores encontrados):
+{json.dumps(competitor_summary, ensure_ascii=False, default=str)[:12000]}
+
+NOTAS DE MERCADO POR PRODUCTO:
+{json.dumps([{{"product": r.get("our_product"), "notes": r.get("market_notes", "")}} for r in research_results if r.get("market_notes")], ensure_ascii=False)[:3000]}
 
 {EDUCA_BRANDS_NOTE}
 
-Genera un análisis estratégico completo:
+Genera un análisis estratégico EXHAUSTIVO:
 
-1. **Productos estrella de competidores**: Identifica los productos de competidores con:
-   - Alta visibilidad (aparecen repetidamente)
-   - Propuesta de valor atractiva
-   - Atributos diferenciadores únicos
-   - Nichos no cubiertos por nosotros
+1. **Productos estrella de competidores** (mínimo 8-12): Identifica los MEJORES productos de cada competidor:
+   - Alta visibilidad SEO (aparecen repetidamente en resultados)
+   - Propuesta de valor muy atractiva (combinación precio-horas-ECTS favorable)
+   - Atributos diferenciadores únicos (habilitante, oposiciones, partnerships)
+   - Cubren nichos no presentes en nuestro catálogo
    Clasifica cada uno como: "amenaza_directa", "oportunidad_nicho", o "referente_calidad"
 
-2. **DAFO profundo** (mínimo 8-10 puntos por cuadrante):
-   - Fortalezas: con datos de ventas
-   - Debilidades: con ejemplos de competidores
-   - Oportunidades: huecos de mercado
-   - Amenazas: competidores agresivos, tendencias
+2. **DAFO profundo** (mínimo 10 puntos por cuadrante, con datos concretos):
+   - Fortalezas: respaldadas por datos de ventas nuestros
+   - Debilidades: con ejemplos específicos de competidores que nos superan
+   - Oportunidades: huecos de mercado detectados, tendencias, nichos sin explotar
+   - Amenazas: competidores agresivos con precios/atributos, tendencias tecnológicas, apps de idiomas
 
 Responde SOLO con JSON válido:
 {{
   "competitor_stars": [
     {{
-      "competitor": "...",
-      "product": "...",
+      "competitor": "nombre institución",
+      "product": "nombre producto con detalle",
+      "price": "precio",
       "classification": "amenaza_directa|oportunidad_nicho|referente_calidad",
-      "reason": "...",
-      "impact": "..."
+      "reason": "por qué es estrella (atributos, visibilidad, nicho)",
+      "impact": "impacto concreto en nuestro catálogo"
     }}
   ],
   "swot": {{
-    "strengths": ["punto 1", "punto 2", ...],
-    "weaknesses": ["punto 1", "punto 2", ...],
-    "opportunities": ["punto 1", "punto 2", ...],
-    "threats": ["punto 1", "punto 2", ...]
+    "strengths": ["punto 1 con datos", "punto 2 con datos", ...],
+    "weaknesses": ["punto 1 con ejemplo competidor", ...],
+    "opportunities": ["punto 1: hueco de mercado X", ...],
+    "threats": ["punto 1: competidor X con precio agresivo Y", ...]
   }},
-  "strategic_summary": "Resumen estratégico en 3-4 frases."
+  "strategic_summary": "Resumen estratégico en 3-4 frases con conclusiones accionables."
 }}"""
 
     response = await _call_claude_with_retry(
         client,
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=6000,
+        max_tokens=8000,
     )
 
     text = response.content[0].text
@@ -394,66 +433,106 @@ async def generate_proposals(
     """
     client = _get_client()
 
-    prompt = f"""Eres el director de producto de EDUCA EDTECH Group.
+    # Build compact but complete competitor data
+    competitor_data = []
+    for r in research_results:
+        entry = {"our_product": r.get("our_product", "?"), "competitors": []}
+        for c in r.get("competitors", []):
+            entry["competitors"].append({
+                "name": c.get("competitor_name", "?"),
+                "product": c.get("product_name", "?"),
+                "price": c.get("price", "?"),
+                "ects": c.get("ects", "?"),
+                "attrs": c.get("value_attributes", "?"),
+            })
+        if entry["competitors"]:
+            competitor_data.append(entry)
+
+    prompt = f"""Eres el director de producto de EDUCA EDTECH Group. Genera propuestas EXHAUSTIVAS y DETALLADAS.
 
 DATOS DE VENTAS:
 {json.dumps(analysis_data.get('kpis', {}), ensure_ascii=False)}
 
-INVESTIGACIÓN COMPETITIVA (resumen):
-{json.dumps(research_results, ensure_ascii=False, default=str)[:6000]}
+TODOS LOS PRODUCTOS DEL CATÁLOGO:
+{json.dumps(analysis_data.get('top_20', [])[:20], ensure_ascii=False, default=str)[:4000]}
 
-ANÁLISIS ESTRATÉGICO:
-{json.dumps(strategic_data, ensure_ascii=False, default=str)[:4000]}
+INVESTIGACIÓN COMPETITIVA:
+{json.dumps(competitor_data, ensure_ascii=False, default=str)[:8000]}
 
-PRODUCTOS ACTUALES SELECCIONADOS:
+ANÁLISIS ESTRATÉGICO (DAFO + Estrellas competidores):
+{json.dumps(strategic_data, ensure_ascii=False, default=str)[:5000]}
+
+PRODUCTOS SELECCIONADOS:
 {json.dumps(selected_products, ensure_ascii=False, default=str)[:3000]}
 
-Genera propuestas concretas:
+INSTRUCCIONES CRÍTICAS:
+- Genera propuestas ESPECÍFICAS Y DETALLADAS, no genéricas
+- CADA producto en riesgo o en declive debe tener una propuesta de mejora
+- Los precios propuestos deben basarse en los precios de la competencia encontrados
+- Los nuevos productos deben cubrir huecos detectados en el research
 
-**Bloque A — Mejora de productos existentes:**
-Para productos que lo necesiten: producto actual, precio actual → propuesto (con justificación), nombre actual → propuesto (si mejora SEO/comercial), horas/ECTS ajustados, atributos a añadir, prioridad (alta/media/baja), justificación.
+**Bloque A — Mejora de productos existentes (mínimo 5-8 propuestas):**
+Para CADA producto que necesite mejora (en declive, en riesgo, o superado por competencia):
+- Producto actual con nombre exacto
+- Precio actual → Precio propuesto (justificado con precios de competidores encontrados)
+- Nombre actual → Nombre propuesto (si mejora SEO/comercial)
+- Horas/ECTS actuales → propuestos
+- Atributos concretos a añadir: módulo IA, validez oposiciones, prácticas, certificación, etc.
+- Prioridad alta/media/baja
+- Justificación con referencia a competidores específicos
 
-**Bloque B — Nuevos productos propuestos:**
-Para cada hueco detectado: denominación, tipo, facultad, escuela, institución educativa sugerida, precio recomendado, horas/ECTS, atributos clave, prioridad, justificación.
+**Bloque B — Nuevos productos propuestos (mínimo 10-15 propuestas):**
+Para CADA hueco de mercado detectado:
+- Denominación completa del nuevo producto
+- Tipo: Curso/Máster/Postgrado/Microcredencial/Experto
+- Facultad y Escuela asignadas
+- Institución Educativa que coexpediría (Universidad Nebrija, UTAMED, etc.)
+- Precio recomendado (rango con justificación de mercado)
+- Horas lectivas / créditos ECTS
+- Atributos clave: ECTS, oposiciones, habilitante, prácticas, certificación, doble titulación
+- Público objetivo específico
+- Prioridad alta/media/baja
+- Justificación estratégica con datos de competencia
 
 Responde SOLO con JSON válido:
 {{
   "improvements": [
     {{
-      "current_product": "...",
-      "current_price": "...",
-      "proposed_price": "...",
-      "price_justification": "...",
-      "current_name": "...",
-      "proposed_name": "...",
-      "current_hours_ects": "...",
-      "proposed_hours_ects": "...",
-      "attributes_to_add": ["..."],
+      "current_product": "nombre exacto del producto actual",
+      "current_price": "precio actual €",
+      "proposed_price": "precio propuesto € (rango)",
+      "price_justification": "Competidores X cobra Y€, Z cobra W€",
+      "current_name": "nombre actual",
+      "proposed_name": "nombre propuesto si aplica",
+      "current_hours_ects": "horas/ECTS actuales",
+      "proposed_hours_ects": "horas/ECTS propuestos",
+      "attributes_to_add": ["atributo1", "atributo2"],
       "priority": "alta|media|baja",
-      "strategic_justification": "..."
+      "strategic_justification": "justificación con datos de competencia"
     }}
   ],
   "new_products": [
     {{
-      "name": "...",
-      "type": "...",
-      "faculty": "...",
-      "school": "...",
-      "institution": "...",
-      "recommended_price": "...",
-      "hours_ects": "...",
-      "key_attributes": ["..."],
+      "name": "Denominación completa",
+      "type": "Máster/Curso/Postgrado/Experto/Microcredencial",
+      "faculty": "Facultad asignada",
+      "school": "Escuela asignada",
+      "institution": "IE que coexpide",
+      "recommended_price": "rango precio €",
+      "hours_ects": "horas / ECTS",
+      "key_attributes": ["ECTS", "oposiciones", "prácticas", etc.],
+      "target_audience": "público objetivo",
       "priority": "alta|media|baja",
-      "strategic_justification": "..."
+      "strategic_justification": "hueco detectado + datos competencia"
     }}
   ],
-  "executive_summary": "Resumen de las propuestas en 3-4 frases."
+  "executive_summary": "Resumen ejecutivo de las propuestas en 3-4 frases."
 }}"""
 
     response = await _call_claude_with_retry(
         client,
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=6000,
+        max_tokens=8000,
     )
 
     text = response.content[0].text
