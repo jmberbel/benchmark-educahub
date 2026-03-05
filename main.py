@@ -1,7 +1,7 @@
 """
 main.py — FastAPI application for BenchmarkHub.
 Manages sessions, file uploads, and orchestrates the 5-phase benchmark process.
-Includes: basic auth, session persistence to disk, configurable CORS.
+Uses polling (not SSE) for Phase 3 progress — robust with any proxy.
 """
 
 import os
@@ -54,7 +54,7 @@ AUTH_ENABLED = bool(AUTH_USERNAME and AUTH_PASSWORD)
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 
 # ── App ──
-app = FastAPI(title="BenchmarkHub", version="1.1.0")
+app = FastAPI(title="BenchmarkHub", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -69,10 +69,12 @@ security = HTTPBasic()
 # In-memory session cache (backed by JSON files)
 sessions: dict = {}
 
+# In-memory progress tracking for Phase 3 background tasks
+research_progress: dict = {}  # session_id -> {current, total, current_product, done, error}
+
 
 # ── Auth ──
 def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
-    """Verify HTTP Basic Auth credentials if auth is enabled."""
     if not AUTH_ENABLED:
         return True
     correct_user = secrets.compare_digest(credentials.username, AUTH_USERNAME)
@@ -87,10 +89,8 @@ def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
 
 
 def optional_auth(request: Request):
-    """If auth is enabled, require it. If not, pass through."""
     if not AUTH_ENABLED:
         return True
-    # Extract credentials from Authorization header
     auth_header = request.headers.get("Authorization")
     if not auth_header:
         raise HTTPException(
@@ -103,9 +103,7 @@ def optional_auth(request: Request):
 
 # ── Session persistence ──
 def _save_session(session_id: str, data: dict):
-    """Save session to disk as JSON."""
     path = SESSION_DIR / f"{session_id}.json"
-    # Make a copy to avoid modifying the original
     save_data = {}
     for k, v in data.items():
         try:
@@ -118,7 +116,6 @@ def _save_session(session_id: str, data: dict):
 
 
 def _load_session(session_id: str) -> Optional[dict]:
-    """Load session from disk."""
     path = SESSION_DIR / f"{session_id}.json"
     if path.exists():
         with open(path, "r", encoding="utf-8") as f:
@@ -127,7 +124,6 @@ def _load_session(session_id: str) -> Optional[dict]:
 
 
 def _load_all_sessions():
-    """Load all sessions from disk on startup."""
     for path in SESSION_DIR.glob("*.json"):
         sid = path.stem
         try:
@@ -137,7 +133,6 @@ def _load_all_sessions():
             logger.warning(f"Could not load session {sid}: {e}")
 
 
-# Load sessions on startup
 @app.on_event("startup")
 async def startup_load_sessions():
     _load_all_sessions()
@@ -165,7 +160,6 @@ async def serve_frontend():
 # ── Session management ──
 def _get_session(session_id: str) -> dict:
     if session_id not in sessions:
-        # Try loading from disk
         loaded = _load_session(session_id)
         if loaded:
             sessions[session_id] = loaded
@@ -181,7 +175,6 @@ def _session_dir(session_id: str) -> Path:
 
 
 def _persist(session_id: str):
-    """Convenience: save session to disk after mutation."""
     if session_id in sessions:
         _save_session(session_id, sessions[session_id])
 
@@ -190,19 +183,16 @@ def _persist(session_id: str):
 
 @app.post("/api/phase1/upload")
 async def phase1_upload(file: UploadFile = File(...)):
-    """Upload Excel and analyze sales data."""
     if not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="Solo se aceptan archivos .xlsx o .xls")
 
     session_id = str(uuid.uuid4())[:8]
     upload_path = UPLOAD_DIR / f"{session_id}_{file.filename}"
 
-    # Save file
     with open(upload_path, "wb") as f:
         content = await file.read()
         f.write(content)
 
-    # Analyze
     try:
         analysis = analyze_sales(str(upload_path))
     except Exception as e:
@@ -212,7 +202,6 @@ async def phase1_upload(file: UploadFile = File(...)):
     if "error" in analysis and not analysis.get("year_columns"):
         raise HTTPException(status_code=400, detail=analysis["error"])
 
-    # Store session
     sessions[session_id] = {
         "id": session_id,
         "filename": file.filename,
@@ -239,14 +228,12 @@ async def phase1_upload(file: UploadFile = File(...)):
 
 @app.post("/api/phase2/select")
 async def phase2_select(request: Request):
-    """Auto-propose products for benchmark, or accept user adjustments."""
     body = await request.json()
     session_id = body.get("session_id")
     session = _get_session(session_id)
     faculty_name = body.get("faculty_name", "General")
     session["faculty_name"] = faculty_name
 
-    # If user provides custom selection, use it
     custom_selection = body.get("custom_selection")
     if custom_selection:
         session["selection"] = custom_selection
@@ -254,7 +241,6 @@ async def phase2_select(request: Request):
         _persist(session_id)
         return {"session_id": session_id, "phase": 2, "selection": custom_selection}
 
-    # Otherwise, auto-propose with Claude
     try:
         selection = await propose_selection(session["analysis"])
     except Exception as e:
@@ -270,7 +256,6 @@ async def phase2_select(request: Request):
 
 @app.post("/api/phase2/confirm")
 async def phase2_confirm(request: Request):
-    """Confirm the product selection (with optional adjustments)."""
     body = await request.json()
     session_id = body.get("session_id")
     session = _get_session(session_id)
@@ -284,17 +269,110 @@ async def phase2_confirm(request: Request):
     return {"session_id": session_id, "phase": 2, "status": "confirmed", "selection": session["selection"]}
 
 
-# ─────────────── PHASE 3: Competition Research ───────────────
+# ─────────────── PHASE 3: Competition Research (Polling) ───────────────
 
-@app.post("/api/phase3/research")
-async def phase3_research(request: Request):
-    """Research competition for all selected products.
-    If research is already done, return cached results."""
+async def _run_research_background(session_id: str, all_products: list, category: str):
+    """Background task that runs research and updates progress dict."""
+    session = _get_session(session_id)
+
+    async def progress_cb(name, idx, total):
+        research_progress[session_id]["current"] = idx + 1
+        research_progress[session_id]["current_product"] = name
+        research_progress[session_id]["completed"] = idx + 1
+
+    try:
+        results = await research_all_products(all_products, category, progress_callback=progress_cb)
+        session["research"] = results
+        session["phase"] = 3
+        _persist(session_id)
+        research_progress[session_id]["done"] = True
+        research_progress[session_id]["total_researched"] = len(results)
+        logger.info(f"Research completed for session {session_id}: {len(results)} products")
+    except Exception as e:
+        logger.error(f"Research background error for {session_id}: {e}")
+        research_progress[session_id]["done"] = True
+        research_progress[session_id]["error"] = str(e)
+
+
+@app.post("/api/phase3/start")
+async def phase3_start(request: Request):
+    """Start research in background, return immediately."""
     body = await request.json()
     session_id = body.get("session_id")
     session = _get_session(session_id)
 
-    # Return cached results if already done
+    # Already done?
+    if session.get("research") and session.get("phase", 0) >= 3:
+        return {"session_id": session_id, "status": "already_done", "total_researched": len(session["research"])}
+
+    # Already running?
+    if session_id in research_progress and not research_progress[session_id].get("done"):
+        return {"session_id": session_id, "status": "running"}
+
+    if not session.get("selection"):
+        raise HTTPException(status_code=400, detail="Primero completa la Fase 2")
+
+    selection = session["selection"]
+    all_products = (
+        selection.get("stars", [])
+        + selection.get("emerging", [])
+        + selection.get("at_risk", [])
+    )
+
+    if not all_products:
+        raise HTTPException(status_code=400, detail="No hay productos seleccionados")
+
+    category = session.get("faculty_name", "General")
+
+    # Initialize progress
+    research_progress[session_id] = {
+        "current": 0,
+        "completed": 0,
+        "total": len(all_products),
+        "current_product": "",
+        "done": False,
+        "error": None,
+        "total_researched": 0,
+    }
+
+    # Launch background task
+    asyncio.create_task(_run_research_background(session_id, all_products, category))
+
+    return {"session_id": session_id, "status": "started", "total": len(all_products)}
+
+
+@app.get("/api/phase3/progress/{session_id}")
+async def phase3_progress(session_id: str):
+    """Poll endpoint — returns current research progress."""
+    # Check if results are already persisted
+    session = _get_session(session_id)
+    if session.get("research") and session.get("phase", 0) >= 3:
+        return {"done": True, "total_researched": len(session["research"]), "current": 0, "total": 0}
+
+    # Check in-memory progress
+    prog = research_progress.get(session_id)
+    if not prog:
+        return {"done": False, "current": 0, "total": 0, "current_product": "No iniciado"}
+
+    return prog
+
+
+@app.get("/api/phase3/results/{session_id}")
+async def phase3_results(session_id: str):
+    """Get cached research results."""
+    session = _get_session(session_id)
+    if not session.get("research"):
+        raise HTTPException(status_code=404, detail="Research no completado aún")
+    return {"session_id": session_id, "phase": 3, "research": session["research"]}
+
+
+# Keep old POST endpoint for backward compat
+@app.post("/api/phase3/research")
+async def phase3_research(request: Request):
+    body = await request.json()
+    session_id = body.get("session_id")
+    session = _get_session(session_id)
+
     if session.get("research") and session.get("phase", 0) >= 3:
         return {"session_id": session_id, "phase": 3, "research": session["research"]}
 
@@ -326,83 +404,10 @@ async def phase3_research(request: Request):
     return {"session_id": session_id, "phase": 3, "research": results}
 
 
-# ── SSE endpoint for progress tracking ──
-@app.get("/api/phase3/research/stream")
-async def phase3_research_stream(session_id: str):
-    """SSE endpoint to stream research progress."""
-    from starlette.responses import StreamingResponse
-
-    session = _get_session(session_id)
-
-    # If already done, return immediately
-    if session.get("research") and session.get("phase", 0) >= 3:
-        async def done_stream():
-            yield f"data: {json.dumps({'done': True, 'total_researched': len(session['research'])})}\n\n"
-        return StreamingResponse(done_stream(), media_type="text/event-stream")
-
-    selection = session.get("selection", {})
-    all_products = (
-        selection.get("stars", [])
-        + selection.get("emerging", [])
-        + selection.get("at_risk", [])
-    )
-
-    async def event_stream():
-        progress = {"current": 0, "total": len(all_products), "current_product": ""}
-
-        async def progress_cb(name, idx, total):
-            progress["current"] = idx + 1
-            progress["current_product"] = name
-
-        # Start research in background
-        category = session.get("faculty_name", "General")
-        task = asyncio.create_task(
-            research_all_products(all_products, category, progress_callback=progress_cb)
-        )
-
-        # Stream progress
-        while not task.done():
-            data = json.dumps(progress)
-            yield f"data: {data}\n\n"
-            await asyncio.sleep(2)
-
-        # Final result — wrap in try/except to always send done event
-        try:
-            results = await task
-            session["research"] = results
-            session["phase"] = 3
-            _persist(session_id)
-            yield f"data: {json.dumps({'done': True, 'total_researched': len(results)})}\n\n"
-        except Exception as e:
-            logger.error(f"Research task error: {e}")
-            yield f"data: {json.dumps({'done': True, 'error': str(e), 'total_researched': 0})}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # Disable nginx/proxy buffering
-        },
-    )
-
-
-# ── Get research results (read-only, no re-execution) ──
-@app.get("/api/phase3/results/{session_id}")
-async def phase3_results(session_id: str):
-    """Get cached research results without re-executing."""
-    session = _get_session(session_id)
-    if not session.get("research"):
-        raise HTTPException(status_code=404, detail="Research no completado aún")
-    return {"session_id": session_id, "phase": 3, "research": session["research"]}
-
-
 # ─────────────── PHASE 4: Strategic Analysis ───────────────
 
 @app.post("/api/phase4/analyze")
 async def phase4_analyze(request: Request):
-    """Generate strategic analysis: competitor stars + SWOT."""
     body = await request.json()
     session_id = body.get("session_id")
     session = _get_session(session_id)
@@ -431,7 +436,6 @@ async def phase4_analyze(request: Request):
 
 @app.post("/api/phase5/generate")
 async def phase5_generate(request: Request):
-    """Generate proposals and all 3 deliverables."""
     body = await request.json()
     session_id = body.get("session_id")
     session = _get_session(session_id)
@@ -439,7 +443,6 @@ async def phase5_generate(request: Request):
     if not session.get("strategic"):
         raise HTTPException(status_code=400, detail="Primero completa la Fase 4")
 
-    # Generate proposals
     try:
         props = await generate_proposals(
             session["analysis"],
@@ -452,7 +455,6 @@ async def phase5_generate(request: Request):
         logger.error(f"Proposals error: {e}")
         raise HTTPException(status_code=500, detail=f"Error generando propuestas: {str(e)}")
 
-    # Generate reports
     out_dir = _session_dir(session_id)
     faculty = session.get("faculty_name", "General")
     deliverables = {}

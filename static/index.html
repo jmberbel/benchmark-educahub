@@ -444,7 +444,7 @@ async function confirmAndGoPhase3() {
     goToPhase(3);
 }
 
-// ── PHASE 3 ──
+// ── PHASE 3 (Polling — no SSE) ──
 async function runPhase3() {
     const fill = document.getElementById('researchFill');
     const status = document.getElementById('researchStatus');
@@ -454,135 +454,62 @@ async function runPhase3() {
     fill.style.width = '5%';
     status.textContent = 'Iniciando research de competencia...';
 
-    let lastProgress = 0;
-    let lastTotal = 0;
-    let sseErrorCount = 0;
-    let completionTimer = null;
-    let alreadyRecovering = false;
-
-    function startCompletionTimer(evtSource) {
-        // If all products are done (current === total), wait 30s then auto-recover
-        if (completionTimer) clearTimeout(completionTimer);
-        completionTimer = setTimeout(() => {
-            if (!alreadyRecovering) {
-                alreadyRecovering = true;
-                evtSource.close();
-                status.textContent = 'Finalizando research, recuperando resultados...';
-                fetchResearchResultsWithRetry();
-            }
-        }, 30000);
-    }
-
+    // 1. Start background research
     try {
-        // Use SSE for progress
-        const evtSource = new EventSource(`/api/phase3/research/stream?session_id=${state.sessionId}`);
-        evtSource.onmessage = (e) => {
-            sseErrorCount = 0; // Reset error count on successful message
-            const d = JSON.parse(e.data);
-            if (d.done) {
-                if (completionTimer) clearTimeout(completionTimer);
-                alreadyRecovering = true;
-                evtSource.close();
-                fill.style.width = '100%';
-                if (d.error) {
-                    showError('phase3', 'Error en research: ' + d.error);
-                    status.textContent = 'Error en research.';
-                } else {
-                    status.textContent = `Research completado: ${d.total_researched} productos investigados.`;
-                    fetchResearchResults();
-                }
-                return;
-            }
-            if (d.total > 0) {
-                const pct = Math.round((d.current / d.total) * 100);
-                fill.style.width = pct + '%';
-                lastProgress = d.current;
-                lastTotal = d.total;
-                // If progress reaches 100%, start a safety timer
-                if (d.current >= d.total) {
-                    startCompletionTimer(evtSource);
-                }
-            }
-            status.textContent = `Investigando: ${d.current_product} (${d.current}/${d.total})`;
-        };
-        evtSource.onerror = () => {
-            sseErrorCount++;
-            // If all products were done, go straight to recovery
-            if (lastProgress > 0 && lastProgress >= lastTotal && !alreadyRecovering) {
-                alreadyRecovering = true;
-                if (completionTimer) clearTimeout(completionTimer);
-                evtSource.close();
-                status.textContent = 'Conexion interrumpida, recuperando resultados...';
-                fetchResearchResultsWithRetry();
-                return;
-            }
-            // SSE connections can temporarily drop — only give up after 3 consecutive errors
-            if (sseErrorCount >= 3 && !alreadyRecovering) {
-                alreadyRecovering = true;
-                evtSource.close();
-                if (lastProgress > 0) {
-                    status.textContent = 'Conexion interrumpida, recuperando resultados...';
-                    fetchResearchResultsWithRetry();
-                } else {
-                    runPhase3Direct();
-                }
-            }
-        };
-    } catch (e) {
-        runPhase3Direct();
-    }
-}
-
-async function fetchResearchResultsWithRetry() {
-    const fill = document.getElementById('researchFill');
-    const status = document.getElementById('researchStatus');
-    // Retry a few times with delay — results may not be saved yet
-    for (let attempt = 0; attempt < 5; attempt++) {
-        try {
-            const r = await fetch(`/api/phase3/results/${state.sessionId}`);
-            if (r.ok) {
-                const data = await r.json();
-                state.research = data.research;
-                fill.style.width = '100%';
-                status.textContent = 'Research completado.';
-                renderPhase3(data.research);
-                return;
-            }
-        } catch (e) { /* retry */ }
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        status.textContent = `Recuperando resultados (intento ${attempt + 2})...`;
-    }
-    // All retries failed — fall back to direct request
-    runPhase3Direct();
-}
-
-async function runPhase3Direct() {
-    const fill = document.getElementById('researchFill');
-    const status = document.getElementById('researchStatus');
-    fill.style.width = '30%';
-    status.textContent = 'Investigando competencia (esto puede tardar varios minutos)...';
-
-    try {
-        const res = await fetch('/api/phase3/research', {
+        const startRes = await fetch('/api/phase3/start', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: state.sessionId }),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Error');
-        state.research = data.research;
-        fill.style.width = '100%';
-        status.textContent = 'Research completado.';
-        renderPhase3(data.research);
+        const startData = await startRes.json();
+        if (!startRes.ok) throw new Error(startData.detail || 'Error');
+
+        // Already done from previous run?
+        if (startData.status === 'already_done') {
+            fill.style.width = '100%';
+            status.textContent = 'Research ya completado. Cargando resultados...';
+            await fetchResearchResults();
+            return;
+        }
     } catch (e) {
-        showError('phase3', e.message);
-        fill.style.width = '100%';
-        fill.style.background = 'var(--danger)';
+        showError('phase3', 'Error iniciando research: ' + e.message);
+        return;
     }
+
+    // 2. Poll for progress every 3 seconds
+    const pollInterval = setInterval(async () => {
+        try {
+            const r = await fetch(`/api/phase3/progress/${state.sessionId}`);
+            const prog = await r.json();
+
+            if (prog.done) {
+                clearInterval(pollInterval);
+                fill.style.width = '100%';
+
+                if (prog.error) {
+                    showError('phase3', 'Error en research: ' + prog.error);
+                    status.textContent = 'Error en research.';
+                } else {
+                    status.textContent = `Research completado: ${prog.total_researched} productos investigados.`;
+                    await fetchResearchResults();
+                }
+                return;
+            }
+
+            if (prog.total > 0) {
+                const pct = Math.max(5, Math.round((prog.current / prog.total) * 100));
+                fill.style.width = pct + '%';
+            }
+            if (prog.current_product) {
+                status.textContent = `Investigando: ${prog.current_product} (${prog.current}/${prog.total})`;
+            }
+        } catch (e) {
+            // Network error on poll — just retry next interval
+        }
+    }, 3000);
 }
 
 async function fetchResearchResults() {
     try {
-        // Use GET endpoint to fetch cached results (no re-execution)
         const r = await fetch(`/api/phase3/results/${state.sessionId}`);
         const data = await r.json();
         if (!r.ok) throw new Error(data.detail || 'Error');
