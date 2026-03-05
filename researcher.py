@@ -133,21 +133,30 @@ async def propose_selection(analysis_data: dict) -> dict:
     """
     client = _get_client()
 
-    # Send ALL product data with full detail for better selection
+    # Compact product data — only essential fields to stay under token limits
     name_col = analysis_data.get("name_column", "Producto")
-    all_products = analysis_data.get("top_20", [])[:20]
-    emerging = analysis_data.get("emerging", [])[:10]
-    declining = analysis_data.get("declining", [])[:10]
-    dead = analysis_data.get("dead_products", [])[:10]
+    essential_keys = [name_col, "IDIOMA", "Producto", "Precio", "Créditos", "Horas",
+                      "ventas_total", "crecimiento_pct", "importe_total"]
+
+    def _compact(products, limit):
+        return [
+            {k: p[k] for k in essential_keys if k in p and p[k] is not None}
+            for p in (products or [])[:limit]
+        ]
+
+    top_products = _compact(analysis_data.get("top_20", []), 15)
+    emerging = _compact(analysis_data.get("emerging", []), 8)
+    declining = _compact(analysis_data.get("declining", []), 8)
+    dead = analysis_data.get("dead_products", [])[:8]
 
     prompt = f"""Eres analista de producto formativo senior de EDUCA EDTECH Group.
 
 DATOS DE ANÁLISIS DE VENTAS:
 - KPIs: {json.dumps(analysis_data.get('kpis', {}), ensure_ascii=False)}
-- Top 20 productos (con todos sus datos): {json.dumps(all_products, ensure_ascii=False)}
-- Productos emergentes (+15% crecimiento): {json.dumps(emerging, ensure_ascii=False)}
-- Productos en declive (-15%): {json.dumps(declining, ensure_ascii=False)}
-- Productos muertos: {json.dumps(dead, ensure_ascii=False)}
+- Top 15 productos: {json.dumps(top_products, ensure_ascii=False)}
+- Emergentes (+15%): {json.dumps(emerging, ensure_ascii=False)}
+- En declive (-15%): {json.dumps(declining, ensure_ascii=False)}
+- Muertos: {json.dumps(dead, ensure_ascii=False)}
 
 INSTRUCCIONES CRÍTICAS:
 - Selecciona productos ESPECÍFICOS con su nombre EXACTO del Excel, precio real e información detallada
