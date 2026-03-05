@@ -189,18 +189,50 @@ async def research_single_product(product: dict, category: str) -> dict:
     search_queries = _build_search_queries(product_name, product_type)
 
     educa_list = ", ".join(EDUCA_BRANDS[:10])
-    prompt = f"""Investiga competencia online para: {product_name} ({product_type}, {product_price}€, {product_hours}h, categoría: {category}).
+    prompt = f"""Eres investigador de mercado de formación online. Investiga competencia para este producto de EDUCA EDTECH Group:
+- Producto: {product_name}
+- Tipo: {product_type}
+- Precio: {product_price}€
+- Horas: {product_hours}
+- Categoría: {category}
 
-Busca 3-5 competidores. Marcas EDUCA EDTECH ({educa_list}) NO son competencia, etiquétalas "Grupo EDUCA".
+INSTRUCCIONES:
+1. Busca con queries como: {json.dumps(search_queries[:2], ensure_ascii=False)}
+2. Encuentra 3-5 competidores reales. Prioriza: UNIR, VIU, UDIMA, UOC, IMF, CEREM, ISEP, OBS, IEBS, Campus Training, MasterD.
+3. Para cada competidor extrae de su web:
+   - Precio exacto (o "Bajo consulta" con rango estimado)
+   - Horas lectivas y créditos ECTS
+   - Tipo titulación (Oficial/Propio/Certificado)
+   - Atributos de valor: oposiciones, habilitante, prácticas, becas, financiación, doble titulación, metodología
+   - URL real del producto
+   - Diferenciador clave en su comunicación comercial
+4. Marcas EDUCA EDTECH ({educa_list}) NO son competencia externa, etiquétalas "Grupo EDUCA".
 
-Responde SOLO JSON:
-{{"our_product":"{product_name}","competitors":[{{"competitor_name":"...","product_name":"...","price":"...","hours":"...","ects":"...","degree_type":"...","value_attributes":"...","url":"...","key_differentiator":"...","is_educa_group":false}}],"market_notes":"..."}}"""
+Responde SOLO con JSON válido:
+{{
+  "our_product": "{product_name}",
+  "competitors": [
+    {{
+      "competitor_name": "nombre institución",
+      "product_name": "nombre exacto del producto",
+      "price": "precio o rango",
+      "hours": "horas lectivas",
+      "ects": "créditos ECTS",
+      "degree_type": "Oficial/Propio/Certificado",
+      "value_attributes": "oposiciones, prácticas, becas, etc.",
+      "url": "URL real",
+      "key_differentiator": "principal ventaja competitiva",
+      "is_educa_group": false
+    }}
+  ],
+  "market_notes": "Observaciones del mercado: rango de precios, tendencias, nivel de competencia."
+}}"""
 
     try:
         response = await _call_claude_with_retry(
             client,
             messages=[{"role": "user", "content": prompt}],
-            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}],
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 7}],
             model=RESEARCH_MODEL,
         )
 
