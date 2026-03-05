@@ -351,34 +351,49 @@ async def strategic_analysis(
     # Build a richer competitor summary for better analysis
     competitor_summary = []
     for r in research_results:
-        if r.get("competitors"):
-            for c in r["competitors"]:
-                competitor_summary.append({
-                    "our_product": r.get("our_product", "?"),
-                    "competitor": c.get("competitor_name", "?"),
-                    "product": c.get("product_name", "?"),
-                    "price": c.get("price", "?"),
-                    "ects": c.get("ects", "?"),
-                    "degree_type": c.get("degree_type", "?"),
-                    "value_attrs": c.get("value_attributes", "?"),
-                    "differentiator": c.get("key_differentiator", "?"),
-                })
+        for c in (r.get("competitors") or []):
+            competitor_summary.append({
+                "our_product": str(r.get("our_product", "?")),
+                "competitor": str(c.get("competitor_name", "?")),
+                "product": str(c.get("product_name", "?")),
+                "price": str(c.get("price", "?")),
+                "ects": str(c.get("ects", "?")),
+                "degree_type": str(c.get("degree_type", "?")),
+                "value_attrs": str(c.get("value_attributes", "?")),
+                "differentiator": str(c.get("key_differentiator", "?")),
+            })
+
+    # Pre-serialize data to avoid f-string issues with dicts
+    kpis_json = json.dumps(analysis_data.get('kpis', {}), ensure_ascii=False, default=str)
+    stars_json = json.dumps(selected_products.get('stars', []), ensure_ascii=False, default=str)
+    emerging_json = json.dumps(selected_products.get('emerging', []), ensure_ascii=False, default=str)
+    at_risk_json = json.dumps(selected_products.get('at_risk', []), ensure_ascii=False, default=str)
+    competitor_json = json.dumps(competitor_summary, ensure_ascii=False, default=str)[:12000]
+
+    market_notes = []
+    for r in research_results:
+        if r.get("market_notes"):
+            market_notes.append({
+                "product": str(r.get("our_product", "?")),
+                "notes": str(r.get("market_notes", "")),
+            })
+    market_notes_json = json.dumps(market_notes, ensure_ascii=False, default=str)[:3000]
 
     prompt = f"""Eres un estratega de producto formativo senior de EDUCA EDTECH Group.
 
 DATOS INTERNOS DE VENTAS:
-{json.dumps(analysis_data.get('kpis', {}), ensure_ascii=False)}
+{kpis_json}
 
 PRODUCTOS SELECCIONADOS:
-- Estrellas: {json.dumps(selected_products.get('stars', []), ensure_ascii=False)}
-- Emergentes: {json.dumps(selected_products.get('emerging', []), ensure_ascii=False)}
-- En riesgo: {json.dumps(selected_products.get('at_risk', []), ensure_ascii=False)}
+- Estrellas: {stars_json}
+- Emergentes: {emerging_json}
+- En riesgo: {at_risk_json}
 
 MAPA COMPETITIVO COMPLETO ({len(competitor_summary)} competidores encontrados):
-{json.dumps(competitor_summary, ensure_ascii=False, default=str)[:12000]}
+{competitor_json}
 
 NOTAS DE MERCADO POR PRODUCTO:
-{json.dumps([{{"product": r.get("our_product"), "notes": r.get("market_notes", "")}} for r in research_results if r.get("market_notes")], ensure_ascii=False)[:3000]}
+{market_notes_json}
 
 {EDUCA_BRANDS_NOTE}
 
@@ -445,34 +460,41 @@ async def generate_proposals(
     # Build compact but complete competitor data
     competitor_data = []
     for r in research_results:
-        entry = {"our_product": r.get("our_product", "?"), "competitors": []}
-        for c in r.get("competitors", []):
+        entry = {"our_product": str(r.get("our_product", "?")), "competitors": []}
+        for c in (r.get("competitors") or []):
             entry["competitors"].append({
-                "name": c.get("competitor_name", "?"),
-                "product": c.get("product_name", "?"),
-                "price": c.get("price", "?"),
-                "ects": c.get("ects", "?"),
-                "attrs": c.get("value_attributes", "?"),
+                "name": str(c.get("competitor_name", "?")),
+                "product": str(c.get("product_name", "?")),
+                "price": str(c.get("price", "?")),
+                "ects": str(c.get("ects", "?")),
+                "attrs": str(c.get("value_attributes", "?")),
             })
         if entry["competitors"]:
             competitor_data.append(entry)
 
+    # Pre-serialize all data to avoid f-string issues
+    p5_kpis_json = json.dumps(analysis_data.get('kpis', {}), ensure_ascii=False, default=str)
+    p5_catalog_json = json.dumps(analysis_data.get('top_20', [])[:20], ensure_ascii=False, default=str)[:4000]
+    p5_competitor_json = json.dumps(competitor_data, ensure_ascii=False, default=str)[:8000]
+    p5_strategic_json = json.dumps(strategic_data, ensure_ascii=False, default=str)[:5000]
+    p5_selected_json = json.dumps(selected_products, ensure_ascii=False, default=str)[:3000]
+
     prompt = f"""Eres el director de producto de EDUCA EDTECH Group. Genera propuestas EXHAUSTIVAS y DETALLADAS.
 
 DATOS DE VENTAS:
-{json.dumps(analysis_data.get('kpis', {}), ensure_ascii=False)}
+{p5_kpis_json}
 
 TODOS LOS PRODUCTOS DEL CATÁLOGO:
-{json.dumps(analysis_data.get('top_20', [])[:20], ensure_ascii=False, default=str)[:4000]}
+{p5_catalog_json}
 
 INVESTIGACIÓN COMPETITIVA:
-{json.dumps(competitor_data, ensure_ascii=False, default=str)[:8000]}
+{p5_competitor_json}
 
 ANÁLISIS ESTRATÉGICO (DAFO + Estrellas competidores):
-{json.dumps(strategic_data, ensure_ascii=False, default=str)[:5000]}
+{p5_strategic_json}
 
 PRODUCTOS SELECCIONADOS:
-{json.dumps(selected_products, ensure_ascii=False, default=str)[:3000]}
+{p5_selected_json}
 
 INSTRUCCIONES CRÍTICAS:
 - Genera propuestas ESPECÍFICAS Y DETALLADAS, no genéricas
